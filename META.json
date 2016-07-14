@@ -1,7 +1,7 @@
 {
-   "abstract" : "It's new $module",
+   "abstract" : "It's a modulino used to analyze BLAST output and database in ClickHouse (columnar DBMS for OLAP).",
    "author" : [
-      "mocnii <msestak@irb.hr>"
+      "Martin Sebastijan Šestak"
    ],
    "dynamic_config" : 0,
    "generated_by" : "Minilla/v2.5.0, CPAN::Meta::Converter version 2.143240",
@@ -42,7 +42,7 @@
       },
       "runtime" : {
          "requires" : {
-            "perl" : "5.008001"
+            "perl" : "5.010001"
          }
       },
       "test" : {
@@ -52,5 +52,13 @@
       }
    },
    "release_status" : "unstable",
-   "version" : "0.01"
+   "resources" : {
+      "repository" : {
+         "url" : "https://mocnii@bitbucket.org/mocnii/findorigin.git"
+      }
+   },
+   "version" : "0.01",
+   "x_contributors" : [
+      "mocnii <msestak@irb.hr>"
+   ]
 }
