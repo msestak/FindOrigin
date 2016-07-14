@@ -28,20 +28,10 @@ our @EXPORT_OK = qw{
   run
   init_logging
   get_parameters_from_cmd
-  create_db
   _capture_output
   _exec_cmd
-  _dbi_connect
-  _create_table
-  import_blastout
-  import_map
-  import_blastdb_stats
-  import_names
-  analyze_blastout
-  report_per_ps
-  report_per_ps_unique
-  import_blastout_full
-  import_blastdb
+  _http_exec_query
+  create_db
 
 };
 
@@ -79,7 +69,7 @@ sub run {
 	#$log->trace("This is example of trace logging for $0");
 
     #get dump of param_href if -v (verbose) flag is on (for debugging)
-    my $param_print = sprintf( p($param_href) ) if $verbose;
+    my $param_print = sprintf( Dumper($param_href) ) if $verbose;
     $log->debug( '$param_href = '."$param_print" ) if $verbose;
 
     #call write modes (different subs that print different jobs)
@@ -417,124 +407,51 @@ sub _exec_cmd {
 
 
 ## INTERNAL UTILITY ###
-# Usage      : my $dbh = _dbi_connect( $param_href );
-# Purpose    : creates a connection to database
-# Returns    : database handle
+# Usage      : my $dbh = _http_exec_query( $param_href );
+# Purpose    : executes a query in ClickHouse using http connection
+# Returns    : success and result of query
 # Parameters : ( $param_href )
-# Throws     : DBI errors and warnings
+# Throws     : HTTP::Tiny errors and warnings
 # Comments   : first part of database chain
-# See Also   : DBI and DBD::mysql modules
-sub _dbi_connect {
+# See Also   : 
+sub _http_exec_query {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( '_dbi_connect() needs a hash_ref' ) unless @_ == 1;
+    $log->logcroak( '_http_exec_query() needs a hash_ref' ) unless @_ == 1;
     my ($param_href) = @_;
 	
-	#split logic for operating system
-	my $osname = $^O;
-	my $data_source;
-    my $user     = defined $param_href->{user}     ? $param_href->{user}     : 'msandbox';
-    my $password = defined $param_href->{password} ? $param_href->{password} : 'msandbox';
-	
-	if( $osname eq 'MSWin32' ) {	  
-		my $host     = defined $param_href->{host}     ? $param_href->{host}     : 'localhost';
-    	my $database = defined $param_href->{database} ? $param_href->{database} : 'blastdb';
-    	my $port     = defined $param_href->{port}     ? $param_href->{port}     : 3306;
-    	my $prepare  = 1;   #server side prepare is ON
-		my $use_res  = 0;   #1 doesn't work with selectall_aref (O means it catches in application)
+    my $query    = $param_href->{query} or $log->logcroak('no $query sent to _http_exec_query()!');
+    my $user     = defined $param_href->{user}     ? $param_href->{user}     : 'default';
+    my $password = defined $param_href->{password} ? $param_href->{password} : '';
+	my $host     = defined $param_href->{host}     ? $param_href->{host}     : 'localhost';
+    my $port     = defined $param_href->{port}     ? $param_href->{port}     : 8123;
 
-    	$data_source = "DBI:mysql:database=$database;host=$host;port=$port;mysql_server_prepare=$prepare;mysql_use_result=$use_res";
-	}
-	elsif ( $osname eq 'linux' ) {
-		my $host     = defined $param_href->{host}     ? $param_href->{host}     : 'localhost';
-    	my $database = defined $param_href->{database} ? $param_href->{database} : 'blastdb';
-    	my $port     = defined $param_href->{port}     ? $param_href->{port}     : 3306;
-    	my $socket   = defined $param_href->{socket}   ? $param_href->{socket}   : '/var/lib/mysql/mysql.sock';
-    	my $prepare  = 1;   #server side prepare is ON
-		my $use_res  = 0;   #1 doesn't work with selectall_aref (O means it catches in application)
+	my $url = 'http://' . $host . ':' . $port . '/';
+ 
+    my $http = HTTP::Tiny->new();
+	#print Dumper $http;
+    #print "\n";
+    
+    my $response = $http->request('POST', $url, { content => qq{$query} } );
+	#print Dumper $response;
 
-    	$data_source = "DBI:mysql:database=$database;host=$host;port=$port;mysql_socket=$socket;mysql_server_prepare=$prepare;mysql_use_result=$use_res";
-	}
-	else {
-		$log->error( "Running on unsupported system" );
-	}
+	my $result;
+    if ($response->{success}) {
+    	
+    	#print Dumper $response;
+    
+    	#print content
+    	$result = $response->{content};
+		#print $result;
+    
+    } else {
+        say "Failed: $response->{status} $response->{reasons}";
+    }
 
-	my %conn_attrs  = (
-        RaiseError         => 1,
-        PrintError         => 0,
-        AutoCommit         => 1,
-        ShowErrorStatement => 1,
-    );
-    my $dbh = DBI->connect( $data_source, $user, $password, \%conn_attrs );
+    $log->trace( "Report: sent $query to $url" );
 
-    $log->trace( 'Report: connected to ', $data_source, ' by dbh ', $dbh );
-
-    return $dbh;
+    return $response->{success}, $result;
 }
 
-
-### INTERNAL UTILITY ###
-# Usage      : _create_table( { table_name => $table_info, dbh => $dbh, query => $create_query } );
-# Purpose    : it drops and recreates table
-# Returns    : nothing
-# Parameters : hash_ref of table_name, dbh and query
-# Throws     : errors if it fails
-# Comments   : 
-# See Also   : 
-sub _create_table {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('_create_table() needs a $param_href') unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $table_name   = $param_href->{table_name} or $log->logcroak('no $table_name sent to _create_table()!');
-    my $dbh          = $param_href->{dbh}        or $log->logcroak('no $dbh sent to _create_table()!');
-    my $create_query = $param_href->{query}      or $log->logcroak('no $query sent to _create_table()!');
-
-	#create table in database specified in connection
-    my $drop_query = sprintf( qq{
-    DROP TABLE IF EXISTS %s
-    }, $dbh->quote_identifier($table_name) );
-    eval { $dbh->do($drop_query) };
-    $log->error("Action: dropping $table_name failed: $@") if $@;
-    $log->trace("Action: $table_name dropped successfully!") unless $@;
-
-    eval { $dbh->do($create_query) };
-    $log->error( "Action: creating $table_name failed: $@" ) if $@;
-    $log->trace( "Action: $table_name created successfully!" ) unless $@;
-
-    return;
-}
-
-
-### INTERNAL UTILITY ###
-# Usage      : _load_table_into($tbl_name, $infile, $dbh, $column_list);
-# Purpose    : LOAD DATA INFILE of $infile into $tbl_name
-# Returns    : nothing
-# Parameters : ($tbl_name, $infile, $dbh)
-# Throws     : croaks if wrong number of parameters
-# Comments   : $column_list can be empty
-# See Also   : 
-sub _load_table_into {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('_load_table_into() needs {$tbl_name, $infile, $dbh + opt. $column_list}') unless @_ == 3 or 4;
-    my ($tbl_name, $infile, $dbh, $column_list) = @_;
-	$column_list //= '';
-
-	# load query
-    my $load_query = qq{
-    LOAD DATA INFILE '$infile'
-    INTO TABLE $tbl_name } . q{ FIELDS TERMINATED BY '\t'
-    LINES TERMINATED BY '\n' }
-	. '(' . $column_list . ')';
-	$log->trace("Report: $load_query");
-
-	# report number of rows inserted
-	my $rows;
-    eval { $rows = $dbh->do( $load_query ) };
-	$log->error( "Action: loading into table $tbl_name failed: $@" ) if $@;
-	$log->debug( "Action: table $tbl_name inserted $rows rows!" ) unless $@;
-
-    return;
-}
 
 
 ### INTERFACE SUB ###
@@ -542,39 +459,30 @@ sub _load_table_into {
 # Purpose    : creates database in ClickHouse
 # Returns    : nothing
 # Parameters : ( $param_href ) -> params from command line to connect to ClickHouse
-#            : plus default charset for database
 # Throws     : croaks if wrong number of parameters
 # Comments   : run only once at start (it drops database)
 # See Also   :
 sub create_db {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak ('create_db() needs a hash_ref' ) unless @_ == 1;
-    my ( $param_href ) = @_;
+    $log->logcroak('create_db() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
 
-    my $charset  = defined $param_href->{charset} ? $param_href->{charset} : 'ascii';
-	#repackage parameters to connect to ClickHouse to default mysql database and create $database
-    my $database = $param_href->{database};   #pull out to use here
-    $param_href->{database} = 'mysql';        #insert into $param_href for dbi_connect()
-
-    my $dbh = _dbi_connect( $param_href );
+    my $database     = $param_href->{database} or $log->logcroak('no $database specified on command line!');
+    my $query_del    = qq{DROP DATABASE IF EXISTS $database};
+    my $query_create = qq{CREATE DATABASE IF NOT EXISTS $database};
 
     #first report what are you doing
-    $log->info( "---------->{$database} database creation with CHARSET $charset" );
+    $log->info("---------->{$database} database creation");
 
-    #use $database from command line
-    my $drop_db_query = qq{
-    DROP database IF EXISTS $database
-    };
-    eval { $dbh->do($drop_db_query) };
-    $log->debug( "Action: dropping $database failed: $@" ) if $@;
-    $log->debug( "Action: database $database dropped successfully!" ) unless $@;
+    # drop database
+    my ($success_del, $res_del) = _http_exec_query( { query => $query_del, %$param_href } );
+	$log->debug("Action: dropping $database failed!") unless $success_del;
+	$log->debug("Action: database $database dropped successfully!") if $success_del;
 
-    my $create_db_query = qq{
-    CREATE DATABASE IF NOT EXISTS $database DEFAULT CHARSET $charset
-    };
-    eval { $dbh->do($create_db_query) };
-    $log->debug( "Action: creating $database failed: $@" ) if $@;
-    $log->debug( "Action: database $database created successfully!" ) unless $@;
+    # create database
+    my ($success_create, $res_create) = _http_exec_query( { query => $query_create, %$param_href } );
+    $log->debug("Action: creating $database failed!") unless $success_create;
+    $log->debug("Action: database $database created successfully!") if $success_create;
 
     return;
 }
@@ -602,7 +510,7 @@ sub import_blastout {
     _extract_blastout( { infile => $infile, blastout_import => $blastout_import } );
 
     #get new handle
-    my $dbh = _dbi_connect($param_href);
+    my $dbh = _http_exec_query($param_href);
 
     #create table
     my $create_query = qq{
@@ -626,7 +534,7 @@ sub import_blastout {
     eval { $dbh->do( $load_query, { async => 1 } ) };
 
     # check status while running
-    my $dbh_check             = _dbi_connect($param_href);
+    my $dbh_check             = _http_exec_query($param_href);
     until ( $dbh->mysql_async_ready ) {
         my $processlist_query = qq{
         SELECT TIME_MS, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
@@ -655,7 +563,7 @@ sub import_blastout {
     eval { $dbh->do( $alter_query, { async => 1 } ) };
 
     # check status while running
-    my $dbh_check2            = _dbi_connect($param_href);
+    my $dbh_check2            = _http_exec_query($param_href);
     until ( $dbh->mysql_async_ready ) {
         my $processlist_query = qq{
         SELECT TIME_MS, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
@@ -762,7 +670,7 @@ sub import_map {
 	($map_tbl) = $map_tbl =~ m/\A([^\.]+)\.phmap_names\z/;
 	$map_tbl   .= '_map';
 
-	my $dbh = _dbi_connect($map_href);
+	my $dbh = _http_exec_query($map_href);
 
     # create map table
     my $create_query = sprintf( qq{
@@ -872,7 +780,7 @@ sub import_blastdb_stats {
 	my $stats_genomes_tbl = path($infile)->basename;
 	$stats_genomes_tbl   .='_stats_genomes';
 
-	my $dbh = _dbi_connect($param_href);
+	my $dbh = _http_exec_query($param_href);
 
     # create ps summary table
     my $ps_summary = sprintf( qq{
@@ -1042,7 +950,7 @@ sub import_names {
     $names_tbl =~ s/\./_/g;    #for files that have dots in name)
 
     # get new handle
-    my $dbh = _dbi_connect($param_href);
+    my $dbh = _http_exec_query($param_href);
 
     # create names table
     my $create_names = sprintf( qq{
@@ -1079,7 +987,7 @@ sub analyze_blastout {
     my ($p_href) = @_;
 
     # get new handle
-    my $dbh = _dbi_connect($p_href);
+    my $dbh = _http_exec_query($p_href);
 
     # create blastout_analysis table
     my $blastout_analysis = sprintf( qq{
@@ -1199,7 +1107,7 @@ sub report_per_ps {
     $log->logcroak('report_per_ps() needs a $p_href') unless @_ == 1;
     my ($p_href) = @_;
 
-    my $dbh = _dbi_connect($p_href);
+    my $dbh = _http_exec_query($p_href);
 
 	# name the report_per_ps table
 	my $report_per_ps_tbl = "$p_href->{report_per_ps}";
@@ -1263,7 +1171,7 @@ sub report_per_ps_unique {
     my ($p_href) = @_;
 
     my $out = $p_href->{out} or $log->logcroak('no $out specified on command line!');
-    my $dbh = _dbi_connect($p_href);
+    my $dbh = _http_exec_query($p_href);
 
 	# name the report_per_ps table
 	my $report_per_ps_tbl = "$p_href->{report_per_ps}";
@@ -1421,7 +1329,7 @@ sub import_blastout_full {
     _extract_blastout_full( { infile => $infile, blastout_import => $blastout_import } );
 
     #get new handle
-    my $dbh = _dbi_connect($param_href);
+    my $dbh = _http_exec_query($param_href);
 
     #create table
     my $create_query = qq{
@@ -1456,7 +1364,7 @@ sub import_blastout_full {
     eval { $dbh->do( $load_query, { async => 1 } ) };
 
     # check status while running
-    my $dbh_check             = _dbi_connect($param_href);
+    my $dbh_check             = _http_exec_query($param_href);
     until ( $dbh->mysql_async_ready ) {
         my $processlist_query = qq{
         SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
@@ -1484,7 +1392,7 @@ sub import_blastout_full {
     eval { $dbh->do( $alter_query, { async => 1 } ) };
 
     # check status while running
-    my $dbh_check2            = _dbi_connect($param_href);
+    my $dbh_check2            = _http_exec_query($param_href);
     until ( $dbh->mysql_async_ready ) {
         my $processlist_query = qq{
         SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
@@ -1667,7 +1575,7 @@ sub import_blastdb {
 		my $database = $param_href->{database}    or $log->logcroak( 'no $database specified on command line!' );
 		
 		# get new handle
-    	my $dbh = _dbi_connect($param_href);
+    	my $dbh = _http_exec_query($param_href);
 
     	# create a table to load into
     	my $create_query = sprintf( qq{
@@ -1692,7 +1600,7 @@ sub import_blastdb {
 
     	#check status while running LOAD DATA INFILE
     	{    
-    	    my $dbh_check         = _dbi_connect($param_href);
+    	    my $dbh_check         = _http_exec_query($param_href);
     	    until ( $dbh->mysql_async_ready ) {
 				my $processlist_query = qq{
 					SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
@@ -1720,7 +1628,7 @@ sub import_blastdb {
 	    eval { $dbh->do( $alter_query, { async => 1 } ) };
 	
 	    # check status while running
-	    my $dbh_check2            = _dbi_connect($param_href);
+	    my $dbh_check2            = _http_exec_query($param_href);
 	    until ( $dbh->mysql_async_ready ) {
 	        my $processlist_query = qq{
 	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
