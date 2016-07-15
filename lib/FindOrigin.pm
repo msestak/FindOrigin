@@ -1580,7 +1580,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
-    FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
+    FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
 
     # imports analyze stats file created by AnalyzePhyloDb (uses TI and PS sections in config)
     FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v
@@ -1643,13 +1643,13 @@ It drops and recreates table where it will import and runs separate query at end
 =item import_map
 
  # options from command line
- FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v -p msandbox -u msandbox -po 8123
+ FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
+ FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
 
 Removes header from map file and writes columns (prot_id, phylostrata, ti, psname) to tmp file and imports that file into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
-It can use PS and TI config sections.
+It can use PS, TI and PSNAME config sections.
 
 =item import_blastdb_stats
 
@@ -1661,7 +1661,7 @@ It can use PS and TI config sections.
 
 Imports analyze stats file created by AnalyzePhyloDb.
   AnalysePhyloDb -n /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes.dmp.fmt.new.sync -d /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted/ -t 9606 > analyze_hs_9606_cdhit_large_extracted
-It can use PS and TI config sections.
+It can use PS, TI and PSNAME config sections.
 
 =item import_names
 
