@@ -544,170 +544,118 @@ sub import_blastout {
 }
 
 ### INTERNAL UTILITY ###
-# Usage      : _extract_blastout( { infile => $infile, blastout_import => $blastout_import } );
-# Purpose    : extracts useful columns from blastout file and saves them into file
-# Returns    : nothing
-# Parameters : ($param_href)
-# Throws     : croaks for parameters
-# Comments   : needed for --mode=import_blastout()
-# See Also   : import_blastout()
-sub _extract_blastout {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'extract_blastout() needs {hash_ref}' ) unless @_ == 1;
-    my ($extract_href) = @_;
-
-    open( my $blastout_fh, "< :encoding(ASCII)", $extract_href->{infile} ) or $log->logdie( "Error: BLASTout file not found:$!" );
-    open( my $blastout_fmt_fh, "> :encoding(ASCII)", $extract_href->{blastout_import} ) or $log->logdie( "Error: BLASTout file can't be created:$!" );
-
-    # needed for filtering duplicates
-    # idea is that duplicates come one after another
-    my $prot_prev    = '';
-    my $pgi_prev     = 0;
-    my $ti_prev      = 0;
-	my $formated_cnt = 0;
-
-    # in blastout
-    #ENSG00000151914|ENSP00000354508    pgi|34252924|ti|9606|pi|0|  100.00  7461    0   0   1   7461    1   7461    0.0 1.437e+04
-    
-	$log->debug( "Report: started processing of $extract_href->{infile}" );
-    local $.;
-    while ( <$blastout_fh> ) {
-        chomp;
-
-		my ($prot_id, $hit, undef, undef, undef, undef, undef, undef, undef, undef, undef, undef) = split "\t", $_;
-		my ($pgi, $ti) = $hit =~ m{pgi\|(\d+)\|ti\|(\d+)\|pi\|(?:\d+)\|};
-
-        # check for duplicates for same gene_id with same tax_id and pgi that differ only in e_value
-        if (  "$prot_prev" . "$pgi_prev" . "$ti_prev" ne "$prot_id" . "$pgi" . "$ti" ) {
-            say {$blastout_fmt_fh} $prot_id, "\t", $ti, "\t", $pgi;
-			$formated_cnt++;
-        }
-
-        # set found values for next line to check duplicates
-        $prot_prev = $prot_id;
-        $pgi_prev  = $pgi;
-        $ti_prev   = $ti;
-
-		# show progress
-        if ($. % 1000000 == 0) {
-            $log->trace( "$. lines processed!" );
-        }
-
-    }   # end while reading blastout
-
-    $log->info( "Report: file $extract_href->{blastout_import} printed successfully with $formated_cnt lines (from $. original lines)" );
-
-    return;
-}
-
-
-### INTERNAL UTILITY ###
-# Usage      : --mode=import_map on command name
+# Usage      : --mode=import_map on command line
 # Purpose    : imports map with header format and psname (.phmap_names)
 # Returns    : nothing
 # Parameters : full path to map file and database connection parameters
 # Throws     : croaks if wrong number of parameters
-# Comments   : creates temp files without header for LOAD data infile
-# See Also   : 
+# Comments   : creates temp files without header for final load
+# See Also   :
 sub import_map {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('_import_map() needs {$map_href}') unless @_ == 1;
-    my ($map_href) = @_;
+    $log->logcroak('import_map() needs {$param_href}') unless @_ == 1;
+    my ($param_href) = @_;
 
-	# check required parameters
-    if ( ! exists $map_href->{infile} ) {$log->logcroak('no $infile specified on command line!');}
+    # check required parameters
+    if ( !exists $param_href->{infile} ) { $log->logcroak('no $infile specified on command line!'); }
 
-	# get name of map table
-	my $map_tbl = path($map_href->{infile})->basename;
-	($map_tbl) = $map_tbl =~ m/\A([^\.]+)\.phmap_names\z/;
-	$map_tbl   .= '_map';
+    # get name of map table
+    my $map_tbl = path( $param_href->{infile} )->basename;
+    ($map_tbl) = $map_tbl =~ m/\A([^\.]+)\.phmap_names\z/;
+    $map_tbl .= '_map';
 
-	my $dbh = _http_exec_query($map_href);
+    # create tmp filename in same dir as input map with header
+    my $temp_map = path( path( $param_href->{infile} )->parent, $map_tbl );
+    open( my $tmp_fh, ">", $temp_map ) or $log->logdie("Error: can't open map $temp_map for writing:$!");
 
-    # create map table
-    my $create_query = sprintf( qq{
-	CREATE TABLE IF NOT EXISTS %s (
-	prot_id VARCHAR(40) NOT NULL,
-	phylostrata TINYINT UNSIGNED NOT NULL,
-	ti INT UNSIGNED NOT NULL,
-	psname VARCHAR(200) NULL,
-	PRIMARY KEY(prot_id),
-	KEY(phylostrata),
-	KEY(ti),
-	KEY(psname)
-    ) }, $dbh->quote_identifier($map_tbl) );
-	_create_table( { table_name => $map_tbl, dbh => $dbh, query => $create_query } );
-	$log->trace("Report: $create_query");
+    # need to skip header
+    open( my $map_fh, "<", $param_href->{infile} )
+      or $log->logdie("Error: can't open map $param_href->{infile} for reading:$!");
+    while (<$map_fh>) {
+        chomp;
 
-	# create tmp filename in same dir as input map with header
-	my $temp_map = path(path($map_href->{infile})->parent, $map_tbl);
-	open (my $tmp_fh, ">", $temp_map) or $log->logdie("Error: can't open map $temp_map for writing:$!");
+        # check if record (ignore header)
+        next if !/\A(?:[^\t]+)\t(?:[^\t]+)\t(?:[^\t]+)\t(?:[^\t]+)\z/;
 
-	# need to skip header
-	open (my $map_fh, "<", $map_href->{infile}) or $log->logdie("Error: can't open map $map_href->{infile} for reading:$!");
-	while (<$map_fh>) {
-		chomp;
-	
-		# check if record (ignore header)
-		next if !/\A(?:[^\t]+)\t(?:[^\t]+)\t(?:[^\t]+)\t(?:[^\t]+)\z/;
-	
-		my ($prot_id, $ps, $ti, $ps_name) = split "\t", $_;
+        my ( $prot_id, $ps, $ti, $ps_name ) = split "\t", $_;
 
-		# this is needed because psname can be short without {cellular_organisms : Eukaryota}
-		my $psname_short;
-		if ($ps_name =~ /:/) {   # {cellular_organisms : Eukaryota}
-			(undef, $psname_short) = split ' : ', $ps_name;
-		}
-		else {   #{Eukaryota}
-			$psname_short = $ps_name;
-		}
+        # this is needed because psname can be short without {cellular_organisms : Eukaryota}
+        my $psname_short;
+        if ( $ps_name =~ /:/ ) {    # {cellular_organisms : Eukaryota}
+            ( undef, $psname_short ) = split ' : ', $ps_name;
+        }
+        else {                      #{Eukaryota}
+            $psname_short = $ps_name;
+        }
 
-		# update map with new phylostrata (shorter phylogeny)
-		my $ps_new;
-		if ( exists $map_href->{ps}->{$ps} ) {
-			$ps_new = $map_href->{ps}->{$ps};
-			#say "LINE:$.\tPS_INFILE:$ps\tPS_NEW:$ps_new";
-			$ps = $ps_new;
-		}
+        # update map with new phylostrata (shorter phylogeny)
+        my $ps_new;
+        if ( exists $param_href->{ps}->{$ps} ) {
+            $ps_new = $param_href->{ps}->{$ps};
 
-		# update map with new tax_id (shorter phylogeny)
-		my $ti_new;
-		if ( exists $map_href->{ti}->{$ti} ) {
-			$ti_new = $map_href->{ti}->{$ti};
-			#say "LINE:$.\tTI_INFILE:$ti\tTI_NEW:$ti_new";
-			$ti = $ti_new;
-		}
+            #say "LINE:$.\tPS_INFILE:$ps\tPS_NEW:$ps_new";
+            $ps = $ps_new;
+        }
 
-		# update map with new phylostrata name (shorter phylogeny)
-		my $psname_new;
-		if ( exists $map_href->{psname}->{$psname_short} ) {
-			$psname_new = $map_href->{psname}->{$psname_short};
-			#say "LINE:$.\tPS_REAL_NAME:$psname_short\tPSNAME_NEW:$psname_new";
-			$psname_short = $psname_new;
-		}
+        # update map with new tax_id (shorter phylogeny)
+        my $ti_new;
+        if ( exists $param_href->{ti}->{$ti} ) {
+            $ti_new = $param_href->{ti}->{$ti};
 
-		# print to tmp map file
-		say {$tmp_fh} "$prot_id\t$ps\t$ti\t$psname_short";
+            #say "LINE:$.\tTI_INFILE:$ti\tTI_NEW:$ti_new";
+            $ti = $ti_new;
+        }
 
-	}   # end while
+        # update map with new phylostrata name (shorter phylogeny)
+        my $psname_new;
+        if ( exists $param_href->{psname}->{$psname_short} ) {
+            $psname_new = $param_href->{psname}->{$psname_short};
 
-	# explicit close needed else it can break
-	close $tmp_fh;
+            #say "LINE:$.\tPS_REAL_NAME:$psname_short\tPSNAME_NEW:$psname_new";
+            $psname_short = $psname_new;
+        }
 
-	# load tmp map file without header
-    my $load_query = qq{
-    LOAD DATA INFILE '$temp_map'
-    INTO TABLE $map_tbl } . q{ FIELDS TERMINATED BY '\t'
-    LINES TERMINATED BY '\n'
-    };
-	$log->trace("Report: $load_query");
-	my $rows;
-    eval { $rows = $dbh->do( $load_query ) };
-	$log->error( "Action: loading into table $map_tbl failed: $@" ) if $@;
-	$log->debug( "Action: table $map_tbl inserted $rows rows!" ) unless $@;
+        # print to tmp map file
+        say {$tmp_fh} "$prot_id\t$ps\t$ti\t$psname_short";
 
-	# unlink tmp map file
-	unlink $temp_map and $log->warn("Action: $temp_map unlinked");
+    }    # end while
+
+    # explicit close needed else it can break
+    close $tmp_fh;
+
+    # drop and recreate table where we are importing
+    my $query_drop = qq{DROP TABLE IF EXISTS $param_href->{database}.$map_tbl};
+    my ( $success_drop, $res_drop ) = _http_exec_query( { query => $query_drop, %$param_href } );
+    $log->error("Error: dropping $map_tbl failed!") unless $success_drop;
+    $log->debug("Action: table $map_tbl dropped successfully!") if $success_drop;
+
+    my $columns      = q{(prot_id String, ps UInt8, ti UInt32, psname String, date Date DEFAULT today())};
+    my $engine       = q{ENGINE=MergeTree(date, prot_id, 8192)};
+    my $query_create = qq{CREATE TABLE IF NOT EXISTS  $param_href->{database}.$map_tbl $columns $engine};
+    my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
+    $log->error("Error: creating $map_tbl failed!") unless $success_create;
+    $log->debug("Action: table $map_tbl created successfully!") if $success_create;
+
+    # import into $map_tbl
+    my $import_query = qq{INSERT INTO $param_href->{database}.$map_tbl (prot_id, ps, ti, psname) FORMAT TabSeparated};
+    my $import_cmd   = qq{ cat $temp_map | clickhouse-client --query "$import_query"};
+    my ( $stdout, $stderr, $exit ) = _capture_output( $import_cmd, $param_href );
+    if ( $exit == 0 ) {
+        $log->debug("Action: import to $param_href->{database}.$map_tbl success!");
+    }
+    else {
+        $log->error("Error: $import_cmd failed: $stderr");
+    }
+
+    # check number of rows inserted
+    my $query_cnt = qq{SELECT count() FROM $param_href->{database}.$map_tbl};
+    my ( $success_cnt, $res_cnt ) = _http_exec_query( { query => $query_cnt, %$param_href } );
+    $res_cnt =~ s/\n//g;    # remove trailing newline
+    $log->debug("Error: counting rows for $map_tbl failed!") unless $success_cnt;
+    $log->info("Action: inserted $res_cnt rows into {$map_tbl}") if $success_cnt;
+
+    # unlink tmp map file
+    unlink $temp_map and $log->warn("Action: $temp_map unlinked");
 
     return;
 }
