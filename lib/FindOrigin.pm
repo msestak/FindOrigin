@@ -33,6 +33,7 @@ our @EXPORT_OK = qw{
   _http_exec_query
   create_db
   import_blastout
+  import_blastdb_stats
 
 };
 
@@ -667,80 +668,142 @@ sub import_map {
 # Returns    : nothing
 # Parameters : infile and connection paramaters
 # Throws     : croaks if wrong number of parameters
-# Comments   : 
-# See Also   : 
+# Comments   : splits analyze file into 2 files (ps summary and genomes list)
+# See Also   :
 sub import_blastdb_stats {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('import_blastdb_stats() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
 
     my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
-	my $stats_ps_tbl = path($infile)->basename;
-	$stats_ps_tbl   .= '_stats_ps';
-	my $stats_genomes_tbl = path($infile)->basename;
-	$stats_genomes_tbl   .='_stats_genomes';
+    my $stats_ps_tbl = path($infile)->basename;
+    $stats_ps_tbl .= '_stats_ps';
+    my $stats_genomes_tbl = path($infile)->basename;
+    $stats_genomes_tbl .= '_stats_genomes';
 
-	my $dbh = _http_exec_query($param_href);
+    # create tmp file for phylostrata part of stats file
+    my $tmp_ps = path( path($infile)->parent, $stats_ps_tbl );
+    open( my $tmp_ps_fh, ">", $tmp_ps ) or $log->logdie("Error: can't open ps_stats $tmp_ps for writing:$!");
 
-    # create ps summary table
-    my $ps_summary = sprintf( qq{
-	CREATE TABLE %s (
-	phylostrata TINYINT UNSIGNED NOT NULL,
-	num_of_genomes INT UNSIGNED NOT NULL,
-	ti INT UNSIGNED NOT NULL,
-	PRIMARY KEY(phylostrata),
-	KEY(ti),
-	KEY(num_of_genomes)
-    ) }, $dbh->quote_identifier($stats_ps_tbl) );
-	_create_table( { table_name => $stats_ps_tbl, dbh => $dbh, query => $ps_summary } );
-	$log->trace("Report: $ps_summary");
+    # create tmp file for genomes part of stats file
+    my $tmp_stats = path( path($infile)->parent, $stats_genomes_tbl );
+    open( my $tmp_stats_fh, ">", $tmp_stats )
+      or $log->logdie("Error: can't open genomes_stats $tmp_stats for writing:$!");
 
-	# create genomes per phylostrata table
-    my $genomes_per_ps = sprintf( qq{
-	CREATE TABLE %s (
-	phylostrata TINYINT UNSIGNED NOT NULL,
-	psti INT UNSIGNED NOT NULL,
-	num_of_genes INT UNSIGNED NOT NULL,
-	ti INT UNSIGNED NOT NULL,
-	PRIMARY KEY(ti),
-	KEY(phylostrata),
-	KEY(num_of_genes)
-    ) }, $dbh->quote_identifier($stats_genomes_tbl) );
-	_create_table( { table_name => $stats_genomes_tbl, dbh => $dbh, query => $genomes_per_ps } );
-	$log->trace("Report: $genomes_per_ps");
+    # read and write stats file into 2 files
+    _read_stats_file( { %{$param_href}, tmp_ps_fh => $tmp_ps_fh, tmp_stats_fh => $tmp_stats_fh } );
 
-	# create tmp file for genomes part of stats file
-	my $temp_stats = path(path($infile)->parent, $stats_genomes_tbl);
-	open (my $tmp_fh, ">", $temp_stats) or $log->logdie("Error: can't open map $temp_stats for writing:$!");
+    # PART 1: tmp ps stats tbl
+    # drop and recreate $stats_ps_tbl
+    my $query_drop = qq{DROP TABLE IF EXISTS $param_href->{database}.$stats_ps_tbl};
+    my ( $success_drop, $res_drop ) = _http_exec_query( { query => $query_drop, %$param_href } );
+    $log->error("Error: dropping $stats_ps_tbl failed!") unless $success_drop;
+    $log->debug("Action: table $stats_ps_tbl dropped successfully!") if $success_drop;
 
-	# read and import stats file into ClickHouse
-	_read_stats_file( { ps_tbl => $stats_ps_tbl, dbh => $dbh, %{$param_href}, tmp_fh => $tmp_fh } );
+    my $columns      = q{(ps UInt8,num_of_genomes UInt32, ti UInt32, date Date DEFAULT today())};
+    my $engine       = q{ENGINE=MergeTree(date, (ps, ti), 8192)};
+    my $query_create = qq{CREATE TABLE IF NOT EXISTS  $param_href->{database}.$stats_ps_tbl $columns $engine};
+    my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
+    $log->error("Error: creating $stats_ps_tbl failed!") unless $success_create;
+    $log->debug("Action: table $stats_ps_tbl created successfully!") if $success_create;
 
-	# load genomes per phylostrata
-    my $load_query = qq{
-    LOAD DATA INFILE '$temp_stats'
-    INTO TABLE $stats_genomes_tbl } . q{ FIELDS TERMINATED BY '\t'
-    LINES TERMINATED BY '\n'
-    };
-	$log->trace("Report: $load_query");
-	my $rows;
-    eval { $rows = $dbh->do( $load_query ) };
-	$log->error( "Action: loading into table $stats_genomes_tbl failed: $@" ) if $@;
-	$log->debug( "Action: table $stats_genomes_tbl inserted $rows rows!" ) unless $@;
+    # import into $stats_ps_tbl
+    my $import_query_ps
+      = qq{INSERT INTO $param_href->{database}.$stats_ps_tbl (ps, num_of_genomes, ti) FORMAT TabSeparated};
+    my $import_cmd_ps = qq{ <  $tmp_ps clickhouse-client --query "$import_query_ps"};
+    my ( $stdout_ps, $stderr_ps, $exit_ps ) = _capture_output( $import_cmd_ps, $param_href );
+    if ( $exit_ps == 0 ) {
+        $log->debug("Action: import to $param_href->{database}.$stats_ps_tbl success!");
+    }
+    else {
+        $log->error("Error: $import_cmd_ps failed: $stderr_ps");
+    }
 
-	# unlink tmp map file
-	unlink $temp_stats and $log->warn("Action: $temp_stats unlinked");
-	$dbh->disconnect;
+    # check number of rows inserted
+    my $query_cnt_ps = qq{SELECT count() FROM $param_href->{database}.$stats_ps_tbl};
+    my ( $success_cnt_ps, $res_cnt_ps ) = _http_exec_query( { query => $query_cnt_ps, %$param_href } );
+    $res_cnt_ps =~ s/\n//g;    # remove trailing newline
+    $log->debug("Error: counting rows for $stats_ps_tbl failed!") unless $success_cnt_ps;
+    $log->info("Action: inserted $res_cnt_ps rows into {$stats_ps_tbl}") if $success_cnt_ps;
+
+    # PART 2: real ps stats table
+    my $query_drop2 = qq{DROP TABLE IF EXISTS $param_href->{database}.${stats_ps_tbl}2};
+    my ( $success_drop2, $res_drop2 ) = _http_exec_query( { query => $query_drop2, %$param_href } );
+    $log->error("Error: dropping ${stats_ps_tbl}2 failed!") unless $success_drop2;
+    $log->debug("Action: table ${stats_ps_tbl}2 dropped successfully!") if $success_drop2;
+
+    my $query_create2
+      = qq{CREATE TABLE $param_href->{database}.${stats_ps_tbl}2 ENGINE=MergeTree (date, ps, 8192) AS SELECT DISTINCT ps, sum(num_of_genomes) AS num_of_genomes, ti, date FROM $param_href->{database}.$stats_ps_tbl GROUP BY ps, ti, date ORDER BY ps};
+    my ( $success_create2, $res_create2 ) = _http_exec_query( { query => $query_create2, %$param_href } );
+    $log->error("Error: creating ${stats_ps_tbl}2 failed!") unless $success_create2;
+    $log->debug("Action: table ${stats_ps_tbl}2 created successfully!") if $success_create2;
+
+    # check number of rows inserted (now in aggregated table)
+    my $query_cnt_ps2 = qq{SELECT count() FROM $param_href->{database}.${stats_ps_tbl}2};
+    my ( $success_cnt_ps2, $res_cnt_ps2 ) = _http_exec_query( { query => $query_cnt_ps2, %$param_href } );
+    $res_cnt_ps2 =~ s/\n//g;    # remove trailing newline
+    $log->debug("Error: counting rows for ${stats_ps_tbl}2 failed!") unless $success_cnt_ps2;
+    $log->info("Action: inserted $res_cnt_ps2 rows into {${stats_ps_tbl}2}") if $success_cnt_ps2;
+
+    # PART 3: DROP original stats table and rename stats2 table to this table
+    # my $query_drop = qq{DROP TABLE IF EXISTS $param_href->{database}.$stats_ps_tbl};
+    my ( $success_drop_again, $res_drop_again ) = _http_exec_query( { query => $query_drop, %$param_href } );
+    $log->error("Error: dropping $stats_ps_tbl failed!") unless $success_drop_again;
+    $log->debug("Action: table $stats_ps_tbl dropped successfully!") if $success_drop_again;
+
+    # rename stats2 table to this table
+    my $query_rename_stats = qq{RENAME TABLE $param_href->{database}.${stats_ps_tbl}2 TO $param_href->{database}.$stats_ps_tbl};
+    my ( $success_rename, $res_rename ) = _http_exec_query( { query => $query_rename_stats, %$param_href } );
+    $res_rename =~ s/\n//g;    # remove trailing newline
+    $log->debug("Error: renaming ${stats_ps_tbl}2 to $stats_ps_tbl failed!") unless $success_rename;
+    $log->info("Action: renamed ${stats_ps_tbl}2 to $stats_ps_tbl") if $success_rename;
+
+    # PART 3: SECOND table
+    # drop and recreate $stats_genomes_tbl
+    my $query_drop_gen = qq{DROP TABLE IF EXISTS $param_href->{database}.$stats_genomes_tbl};
+    my ( $success_drop_gen, $res_drop_gen ) = _http_exec_query( { query => $query_drop_gen, %$param_href } );
+    $log->error("Error: dropping $stats_genomes_tbl failed!") unless $success_drop_gen;
+    $log->debug("Action: table $stats_genomes_tbl dropped successfully!") if $success_drop_gen;
+
+    my $columns_gen = q{(ps UInt8, psti UInt32, num_of_genes UInt32, ti UInt32, date Date DEFAULT today())};
+    my $engine_gen  = q{ENGINE=MergeTree(date, (ps, ti), 8192)};
+    my $query_create_gen
+      = qq{CREATE TABLE IF NOT EXISTS  $param_href->{database}.$stats_genomes_tbl $columns_gen $engine_gen};
+    my ( $success_create_gen, $res_create_gen ) = _http_exec_query( { query => $query_create_gen, %$param_href } );
+    $log->error("Error: creating $stats_genomes_tbl failed!") unless $success_create_gen;
+    $log->debug("Action: table $stats_genomes_tbl created successfully!") if $success_create_gen;
+
+    # import into $stats_genomes_tbl
+    my $import_query_gen
+      = qq{INSERT INTO $param_href->{database}.$stats_genomes_tbl (ps, psti, num_of_genes, ti) FORMAT TabSeparated};
+    my $import_cmd_gen = qq{ <  $tmp_stats clickhouse-client --query "$import_query_gen"};
+    my ( $stdout_gen, $stderr_gen, $exit_gen ) = _capture_output( $import_cmd_gen, $param_href );
+    if ( $exit_gen == 0 ) {
+        $log->debug("Action: import to $param_href->{database}.$stats_genomes_tbl success!");
+    }
+    else {
+        $log->error("Error: $import_cmd_gen failed: $stderr_ps");
+    }
+
+    # check number of rows inserted
+    my $query_cnt_gen = qq{SELECT count() FROM $param_href->{database}.$stats_genomes_tbl};
+    my ( $success_cnt_gen, $res_cnt_gen ) = _http_exec_query( { query => $query_cnt_gen, %$param_href } );
+    $res_cnt_gen =~ s/\n//g;    # remove trailing newline
+    $log->debug("Error: counting rows for $stats_genomes_tbl failed!") unless $success_cnt_gen;
+    $log->info("Action: inserted $res_cnt_gen rows into {$stats_genomes_tbl}") if $success_cnt_gen;
+
+    # unlink tmp stats files
+    #unlink $tmp_ps and $log->warn("Action: $tmp_ps unlinked");
+    #unlink $tmp_stats and $log->warn("Action: $tmp_stats unlinked");
 
     return;
 }
 
-
 ### INTERNAL UTILITY ###
-# Usage      : _read_stats_file( { ps_tbl => $stats_ps_tbl, dbh => $dbh, %{$param_href}, tmp_fh => $tmp_fh } );
+# Usage      : _read_stats_file( { %{$param_href}, tmp_ps_fh => $tmp_ps_fh, tmp_stats_fh => $tmp_stats_fh  } );
 # Purpose    : to read stats file and import it to database
 # Returns    : nothing
-# Parameters : 
+# Parameters :
 # Throws     : croaks if wrong number of parameters
 # Comments   : part of --mode=import_blastdb_stats
 # See Also   : --mode=import_blastdb_stats
@@ -749,84 +812,68 @@ sub _read_stats_file {
     $log->logcroak('_read_stats_file() needs a $param_href') unless @_ == 1;
     my ($p_href) = @_;
 
-	# prepare statement handle to insert ps lines
-	my $insert_ps = sprintf( qq{
-	INSERT INTO %s (phylostrata, num_of_genomes, ti)
-	VALUES (?, ?, ?)
-	}, $p_href->{dbh}->quote_identifier($p_href->{ps_tbl}) );
-	my $sth = $p_href->{dbh}->prepare($insert_ps);
-	$log->trace("Report: $insert_ps");
+    # read and write to files
+    open( my $stats_fh, "<", $p_href->{infile} )
+      or $log->logdie("Error: can't open file $p_href->{infile} for reading:$!");
+    while (<$stats_fh>) {
+        chomp;
 
-	# prepare statement handle to update ps lines
-	my $update_ps = sprintf( qq{
-	UPDATE %s 
-	SET num_of_genomes = num_of_genomes + ?
-	WHERE phylostrata = ?
-	}, $p_href->{dbh}->quote_identifier($p_href->{ps_tbl}) );
-	my $sth_up = $p_href->{dbh}->prepare($update_ps);
-	$log->trace("Report: $update_ps");
+        # if ps then summary line
+        if (m/ps/) {
+            my ( undef, $ps, $num_of_genomes, $ti, ) = split "\t", $_;
 
-	# read and import ps_table
-	open (my $stats_fh, "<", $p_href->{infile}) or $log->logdie("Error: can't open map $p_href->{infile} for reading:$!");
-	while (<$stats_fh>) {
-		chomp;
+            # update phylostrata with new phylostrata (shorter phylogeny)
+            my $ps_new;
+            if ( exists $p_href->{ps}->{$ps} ) {
+                $ps_new = $p_href->{ps}->{$ps};
 
-		# if ps then summary line
-		if (m/ps/) {
-			#import to stats_ps_tbl
-			my (undef, $ps, $num_of_genomes, $ti, ) = split "\t", $_;
+                #say "LINE:$.\tPS_INFILE:$ps\tPS_NEW:$ps_new";
+                $ps = $ps_new;
+            }
 
-			# update phylostrata with new phylostrata (shorter phylogeny)
-			my $ps_new;
-			if ( exists $p_href->{ps}->{$ps} ) {
-				$ps_new = $p_href->{ps}->{$ps};
-				#say "LINE:$.\tPS_INFILE:$ps\tPS_NEW:$ps_new";
-				$ps = $ps_new;
-			}
+            # update psti with new tax_id (shorter phylogeny)
+            my $ti_new;
+            if ( exists $p_href->{ti}->{$ti} ) {
+                $ti_new = $p_href->{ti}->{$ti};
 
-			# update psti with new tax_id (shorter phylogeny)
-			my $ti_new;
-			if ( exists $p_href->{ti}->{$ti} ) {
-				$ti_new = $p_href->{ti}->{$ti};
-				#say "LINE:$.\tTI_INFILE:$ti\tTI_NEW:$ti_new";
-				$ti = $ti_new;
-			}
-			
-			# if it fails (ps already exists) update num_of_genomes
-			eval {$sth->execute($ps, $num_of_genomes, $ti); };
-			if ($@) {
-				$sth_up->execute($num_of_genomes, $ps);
-			}
-		}
-		# else normal genome in phylostrata line
-		else {
-			my ($ps2, $psti, $num_of_genes, $ti2) = split "\t", $_;
+                #say "LINE:$.\tTI_INFILE:$ti\tTI_NEW:$ti_new";
+                $ti = $ti_new;
+            }
 
-			# update phylostrata with new phylostrata (shorter phylogeny)
-			my $ps_new2;
-			if ( exists $p_href->{ps}->{$ps2} ) {
-				$ps_new2 = $p_href->{ps}->{$ps2};
-				#say "LINE:$.\tPS_INFILE:$ps2\tPS_NEW:$ps_new2";
-				$ps2 = $ps_new2;
-			}
+            # write to tmp_stats file
+            say { $p_href->{tmp_ps_fh} } "$ps\t$num_of_genomes\t$ti";
+        }
 
-			# update psti with new tax_id (shorter phylogeny)
-			my $psti_new;
-			if ( exists $p_href->{ti}->{$psti} ) {
-				$psti_new = $p_href->{ti}->{$psti};
-				#say "LINE:$.\tTI_INFILE:$psti\tTI_NEW:$psti_new";
-				$psti = $psti_new;
-			}
+        # else normal genome in phylostrata line
+        else {
+            my ( $ps2, $psti, $num_of_genes, $ti2 ) = split "\t", $_;
 
-			# print to file
-			say { $p_href->{tmp_fh} } "$ps2\t$psti\t$num_of_genes\t$ti2";
-		}
-	}   # end while reading stats file
+            # update phylostrata with new phylostrata (shorter phylogeny)
+            my $ps_new2;
+            if ( exists $p_href->{ps}->{$ps2} ) {
+                $ps_new2 = $p_href->{ps}->{$ps2};
 
-	# explicit close needed else it can break
-	close $p_href->{tmp_fh};
-	$sth->finish;
-	$sth_up->finish;
+                #say "LINE:$.\tPS_INFILE:$ps2\tPS_NEW:$ps_new2";
+                $ps2 = $ps_new2;
+            }
+
+            # update psti with new tax_id (shorter phylogeny)
+            my $psti_new;
+            if ( exists $p_href->{ti}->{$psti} ) {
+                $psti_new = $p_href->{ti}->{$psti};
+
+                #say "LINE:$.\tTI_INFILE:$psti\tTI_NEW:$psti_new";
+                $psti = $psti_new;
+            }
+
+            # print to file
+            say { $p_href->{tmp_stats_fh} } "$ps2\t$psti\t$num_of_genes\t$ti2";
+        }
+    }    # end while reading stats file
+
+    # explicit close needed else it can break
+    close $p_href->{tmp_ps_fh};
+    close $p_href->{tmp_stats_fh};
 
     return;
 }
@@ -1583,7 +1630,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
 
     # imports analyze stats file created by AnalyzePhyloDb (uses TI and PS sections in config)
-    FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v
+    FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
 
     # import names file for species_name
     FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
@@ -1654,14 +1701,15 @@ It can use PS, TI and PSNAME config sections.
 =item import_blastdb_stats
 
  # options from command line
- FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v -p msandbox -u msandbox -po 8123
+ FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v
+ FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
 
 Imports analyze stats file created by AnalyzePhyloDb.
-  AnalysePhyloDb -n /home/msestak/dropbox/Databases/db_02_09_2015/data/nr_raw/nodes.dmp.fmt.new.sync -d /home/msestak/dropbox/Databases/db_02_09_2015/data/cdhit_large/extracted/ -t 9606 > analyze_hs_9606_cdhit_large_extracted
-It can use PS, TI and PSNAME config sections.
+ AnalysePhyloDb -n nr_raw/nodes.dmp.fmt.new.sync -t 9606 -d ./all_ff_for_db/ > analyze_hs_9606_all_ff_for_db
+
+It can use PS and TI config sections.
 
 =item import_names
 

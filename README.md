@@ -11,10 +11,10 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
-    FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
+    FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
 
     # imports analyze stats file created by AnalyzePhyloDb (uses TI and PS sections in config)
-    FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v
+    FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
 
     # import names file for species_name
     FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
@@ -71,24 +71,25 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_map
 
         # options from command line
-        FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v -p msandbox -u msandbox -po 8123
+        FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -ho localhost -po 8123 -v
 
         # options from config
-        FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
+        FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
 
     Removes header from map file and writes columns (prot\_id, phylostrata, ti, psname) to tmp file and imports that file into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
-    It can use PS and TI config sections.
+    It can use PS, TI and PSNAME config sections.
 
 - import\_blastdb\_stats
 
         # options from command line
-        FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v -p msandbox -u msandbox -po 8123
+        FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -ho localhost -po 8123 -v
 
         # options from config
-        FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v
+        FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
 
     Imports analyze stats file created by AnalyzePhyloDb.
-      AnalysePhyloDb -n /home/msestak/dropbox/Databases/db\_02\_09\_2015/data/nr\_raw/nodes.dmp.fmt.new.sync -d /home/msestak/dropbox/Databases/db\_02\_09\_2015/data/cdhit\_large/extracted/ -t 9606 > analyze\_hs\_9606\_cdhit\_large\_extracted
+     AnalysePhyloDb -n nr\_raw/nodes.dmp.fmt.new.sync -t 9606 -d ./all\_ff\_for\_db/ > analyze\_hs\_9606\_all\_ff\_for\_db
+
     It can use PS and TI config sections.
 
 - import\_names
