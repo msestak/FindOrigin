@@ -8,7 +8,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=create_db -d test_db_here
 
     # import BLAST output file into ClickHouse database
-    FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
+    FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
     FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
@@ -60,18 +60,18 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_blastout
 
         # options from command line
-        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -ho localhost -po 5625 -v
+        FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz -ho localhost -po 8123 -v
 
         # options from config
-        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
+        FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
 
     Imports compressed BLAST output file (.gz needs pigz) into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
-    It drops and recreates table where it will import.
+    It drops and recreates table where it will import and runs separate query at end to return numer of rows inserted.
 
 - import\_map
 
         # options from command line
-        FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v -p msandbox -u msandbox -po 8123
 
         # options from config
         FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
@@ -82,7 +82,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_blastdb\_stats
 
         # options from command line
-        FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v -p msandbox -u msandbox -po 8123
 
         # options from config
         FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v
@@ -94,7 +94,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_names
 
         # options from command line
-        FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v -p msandbox -u msandbox -po 8123
 
         # options from config
         FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
@@ -104,7 +104,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - analyze\_blastout
 
         # options from command line
-        FindOrigin.pm --mode=analyze_blastout -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=analyze_blastout -d hs_plus -v -p msandbox -u msandbox -po 8123
 
         # options from config
         FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
@@ -114,7 +114,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - report\_per\_ps
 
         # options from command line
-        lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
 
         # options from config
         lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v
@@ -134,7 +134,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - report\_per\_ps\_unique
 
         # options from command line
-        FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
 
         # options from config
         FindOrigin.pm --mode=report_per_ps_unique -d hs_plus -v
@@ -144,7 +144,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_blastout\_full
 
         # options from command line
-        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v -p msandbox -u msandbox -po 8123
 
         # options from config
         FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v
@@ -168,7 +168,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_blastdb
 
         # options from command line
-        FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -p msandbox -u msandbox -po 8123
 
         # options from config
         FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
@@ -199,8 +199,8 @@ Example:
     database = test_db_here
     user     = msandbox
     password = msandbox
-    port     = 5625
-    socket   = /tmp/mysql_sandbox5625.sock
+    port     = 8123
+    socket   = /tmp/mysql_sandbox8123.sock
     charset  = ascii
 
 # LICENSE

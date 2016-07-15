@@ -538,7 +538,7 @@ sub import_blastout {
     my ( $success_cnt, $res_cnt ) = _http_exec_query( { query => $query_cnt, %$param_href } );
 	$res_cnt =~ s/\n//g;   # remove trailing newline
     $log->debug("Error: counting rows in $table failed!") unless $success_cnt;
-    $log->info("Action: inserted $res_cnt rows to $table") if $success_cnt;
+    $log->info("Action: inserted $res_cnt rows into {$table}") if $success_cnt;
 
     return;
 }
@@ -1629,7 +1629,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=create_db -d test_db_here
 
     # import BLAST output file into ClickHouse database
-    FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
+    FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
     FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
@@ -1684,18 +1684,18 @@ Drops ( if it exists) and recreates database in ClickHouse (needs ClickHouse con
 =item import_blastout
 
  # options from command line
- FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -ho localhost -po 5625 -v
+ FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
+ FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
 
 Imports compressed BLAST output file (.gz needs pigz) into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
-It drops and recreates table where it will import.
+It drops and recreates table where it will import and runs separate query at end to return numer of rows inserted.
 
 =item import_map
 
  # options from command line
- FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v -p msandbox -u msandbox -po 8123
 
  # options from config
  FindOrigin.pm --mode=import_map -if t/data/hs3.phmap_names -d hs_plus -v
@@ -1706,7 +1706,7 @@ It can use PS and TI config sections.
 =item import_blastdb_stats
 
  # options from command line
- FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v -p msandbox -u msandbox -po 8123
 
  # options from config
  FindOrigin.pm --mode=import_blastdb_stats -if t/data/analyze_hs_9606_cdhit_large_extracted  -d hs_plus -v
@@ -1718,7 +1718,7 @@ It can use PS and TI config sections.
 =item import_names
 
  # options from command line
- FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v -p msandbox -u msandbox -po 8123
 
  # options from config
  FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
@@ -1728,7 +1728,7 @@ Imports names file (columns ti, species_name) into ClickHouse.
 =item analyze_blastout
 
  # options from command line
- FindOrigin.pm --mode=analyze_blastout -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=analyze_blastout -d hs_plus -v -p msandbox -u msandbox -po 8123
 
  # options from config
  FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
@@ -1739,7 +1739,7 @@ Runs BLAST output analysis - expanding every prot_id to its tax_id hits and spec
 =item report_per_ps
 
  # options from command line
- lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
 
  # options from config
  lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v
@@ -1759,7 +1759,7 @@ Removes specific hits from the BLAST output based on the specified tax_id (exclu
 =item report_per_ps_unique
 
  # options from command line
- FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
 
  # options from config
  FindOrigin.pm --mode=report_per_ps_unique -d hs_plus -v
@@ -1769,7 +1769,7 @@ Update report_per_ps table with unique and intersect hits and gene lists.
 =item import_blastout_full
 
  # options from command line
- FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v -p msandbox -u msandbox -po 8123
 
  # options from config
  FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v
@@ -1794,7 +1794,7 @@ Extracts hit column and splits it on ti and pgi and imports this file into Click
 =item import_blastdb
 
  # options from command line
- FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -p msandbox -u msandbox -po 8123
 
  # options from config
  FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
@@ -1827,8 +1827,8 @@ Example:
  database = test_db_here
  user     = msandbox
  password = msandbox
- port     = 5625
- socket   = /tmp/mysql_sandbox5625.sock
+ port     = 8123
+ socket   = /tmp/mysql_sandbox8123.sock
  charset  = ascii
 
 =head1 LICENSE
