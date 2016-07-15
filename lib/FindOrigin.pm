@@ -407,12 +407,12 @@ sub _exec_cmd {
 
 
 ## INTERNAL UTILITY ###
-# Usage      : my $dbh = _http_exec_query( $param_href );
+# Usage      : my ($success_del, $res_del) = _http_exec_query( { query => $query_del, %$param_href } );
 # Purpose    : executes a query in ClickHouse using http connection
 # Returns    : success and result of query
-# Parameters : ( $param_href )
+# Parameters : query and rest of database params
 # Throws     : HTTP::Tiny errors and warnings
-# Comments   : first part of database chain
+# Comments   : utility function to run queries in Clickhouse
 # See Also   : 
 sub _http_exec_query {
     my $log = Log::Log4perl::get_logger("main");
@@ -1722,7 +1722,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 =item create_db
 
  # options from command line
- FindOrigin.pm --mode=create_db -ho localhost -d test_db_here -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --charset=ascii
+ FindOrigin.pm --mode=create_db -ho localhost -d test_db_here -po 8123
 
  # options from config
  FindOrigin.pm --mode=create_db -d test_db_here
