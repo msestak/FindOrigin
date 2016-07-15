@@ -32,6 +32,7 @@ our @EXPORT_OK = qw{
   _exec_cmd
   _http_exec_query
   create_db
+  import_blastout
 
 };
 
@@ -444,7 +445,7 @@ sub _http_exec_query {
 		#print $result;
     
     } else {
-        say "Failed: $response->{status} $response->{reasons}";
+        $log->error( "Error: $response->{status} $response->{reasons}" );
     }
 
     $log->trace( "Report: sent $query to $url" );
@@ -475,14 +476,14 @@ sub create_db {
     $log->info("---------->{$database} database creation");
 
     # drop database
-    my ($success_del, $res_del) = _http_exec_query( { query => $query_del, %$param_href } );
-	$log->debug("Action: dropping $database failed!") unless $success_del;
-	$log->debug("Action: database $database dropped successfully!") if $success_del;
+    my ( $success_del, $res_del ) = _http_exec_query( { query => $query_del, %$param_href } );
+    $log->error("Action: dropping $database failed!") unless $success_del;
+    $log->debug("Action: database $database dropped successfully!") if $success_del;
 
     # create database
-    my ($success_create, $res_create) = _http_exec_query( { query => $query_create, %$param_href } );
-    $log->debug("Action: creating $database failed!") unless $success_create;
-    $log->debug("Action: database $database created successfully!") if $success_create;
+    my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
+    $log->error("Action: creating $database failed!") unless $success_create;
+    $log->error("Action: database $database created successfully!") if $success_create;
 
     return;
 }
@@ -490,103 +491,54 @@ sub create_db {
 
 ### INTERFACE SUB ###
 # Usage      : --mode=import_blastout
-# Purpose    : loads BLAST output to ClickHouse database
+# Purpose    : imports BLAST output to ClickHouse database
 # Returns    : nothing
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
-# Comments   : it removes duplicates (same tax_id) per gene
-# See Also   : utility sub _extract_blastout()
+# Comments   :
+# See Also   :
 sub import_blastout {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'import_blastout() needs a hash_ref' ) unless @_ == 1;
+    $log->logcroak('import_blastout() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
 
     my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
-    my $table           = path($infile)->basename;
+    my $table = path($infile)->basename;
     $table =~ s/\./_/g;    #for files that have dots in name
-    my $blastout_import = path($infile . "_formated");
+    $table =~ s/_gz//g;    #for files that have dots in name
 
-    #first shorten the blastout file and extract useful columns
-    _extract_blastout( { infile => $infile, blastout_import => $blastout_import } );
+    # drop and recreate table where we are importing
+    my $query_drop = qq{DROP TABLE IF EXISTS $param_href->{database}.$table};
+    my ( $success_drop, $res_drop ) = _http_exec_query( { query => $query_drop, %$param_href } );
+    $log->error("Error: dropping $table failed!") unless $success_drop;
+    $log->debug("Action: table $table dropped successfully!") if $success_drop;
 
-    #get new handle
-    my $dbh = _http_exec_query($param_href);
+    my $columns
+      = q{(prot_id String, blast_hit String, perc_id Float32, alignment_length UInt32, mismatches UInt32, gap_openings UInt32, query_start UInt32, query_end UInt32, subject_start UInt32, subject_end UInt32, e_value Float64, bitscore Float32, date Date DEFAULT today())};
+    my $engine       = q{ENGINE=MergeTree(date, prot_id, 8192)};
+    my $query_create = qq{CREATE TABLE IF NOT EXISTS  $param_href->{database}.$table $columns $engine};
+    my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
+    $log->error("Error: creating $table failed!") unless $success_create;
+    $log->debug("Action: table $table created successfully!") if $success_create;
 
-    #create table
-    my $create_query = qq{
-    CREATE TABLE IF NOT EXISTS $table (
-	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
-    prot_id VARCHAR(40) NOT NULL,
-    ti INT UNSIGNED NOT NULL,
-    pgi CHAR(19) NOT NULL,
-    PRIMARY KEY(id)
-    )};
-    _create_table( { table_name => $table, dbh => $dbh, query => $create_query } );
-
-    #import table
-    my $load_query = qq{
-    LOAD DATA INFILE '$blastout_import'
-    INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
-    LINES TERMINATED BY '\n' 
-    (prot_id, ti, pgi)
-    };
-	$log->trace("$load_query");
-    eval { $dbh->do( $load_query, { async => 1 } ) };
-
-    # check status while running
-    my $dbh_check             = _http_exec_query($param_href);
-    until ( $dbh->mysql_async_ready ) {
-        my $processlist_query = qq{
-        SELECT TIME_MS, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-        WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
-        };
-        my ( $time_ms, $state );
-        my $sth = $dbh_check->prepare($processlist_query);
-        $sth->execute($param_href->{database});
-        $sth->bind_columns( \( $time_ms, $state ) );
-        while ( $sth->fetchrow_arrayref ) {
-            $time_ms = $time_ms / 1000;
-            my $print = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time_ms, $state );
-            $log->trace( $print );
-            sleep 10;
-        }
+    # import into table (in ClickHouse) from gzipped file (needs pigz)
+    my $import_query
+      = qq{INSERT INTO $param_href->{database}.$table (prot_id, blast_hit, perc_id, alignment_length, mismatches, gap_openings, query_start, query_end, subject_start, subject_end, e_value, bitscore) FORMAT TabSeparated};
+    my $import_cmd = qq{ pigz -c -d $infile | clickhouse-client --query "$import_query"};
+    my ( $stdout, $stderr, $exit ) = _capture_output( $import_cmd, $param_href );
+    if ( $exit == 0 ) {
+        $log->debug("Action: import to $param_href->{database}.$table success!");
     }
-    my $rows;
-	eval { $rows = $dbh->mysql_async_result; };
-    $log->info( "Action: import inserted $rows rows!" ) unless $@;
-    $log->error( "Error: loading $table failed: $@" ) if $@;
-
-    # add index
-    my $alter_query = qq{
-    ALTER TABLE $table ADD INDEX protx(prot_id), ADD INDEX tix(ti)
-    };
-    eval { $dbh->do( $alter_query, { async => 1 } ) };
-
-    # check status while running
-    my $dbh_check2            = _http_exec_query($param_href);
-    until ( $dbh->mysql_async_ready ) {
-        my $processlist_query = qq{
-        SELECT TIME_MS, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-        WHERE DB = ? AND INFO LIKE 'ALTER%';
-        };
-        my ( $time_ms, $state );
-        my $sth = $dbh_check2->prepare($processlist_query);
-        $sth->execute($param_href->{database});
-        $sth->bind_columns( \( $time_ms, $state ) );
-        while ( $sth->fetchrow_arrayref ) {
-            $time_ms = $time_ms / 1000;
-            my $print = sprintf( "Time running:%0.3f sec\tSTATE:%s\n", $time_ms, $state );
-            $log->trace( $print );
-            sleep 10;
-        }
+    else {
+        $log->error("Error: $import_cmd failed: $stderr");
     }
 
-    #report success or failure
-    $log->error( "Error: adding index tix on $table failed: $@" ) if $@;
-    $log->info( "Action: Indices protx and tix on $table added successfully!" ) unless $@;
-	
-	#delete file used to import so it doesn't use disk space
-	unlink $blastout_import and $log->warn("File $blastout_import unlinked!");
+    # check number of rows inserted
+    my $query_cnt = qq{SELECT count() FROM $param_href->{database}.$table};
+    my ( $success_cnt, $res_cnt ) = _http_exec_query( { query => $query_cnt, %$param_href } );
+	$res_cnt =~ s/\n//g;   # remove trailing newline
+    $log->debug("Error: counting rows in $table failed!") unless $success_cnt;
+    $log->info("Action: inserted $res_cnt rows to $table") if $success_cnt;
 
     return;
 }
@@ -1676,7 +1628,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # drop and recreate database (connection parameters in blastoutanalyze.cnf)
     FindOrigin.pm --mode=create_db -d test_db_here
 
-    # remove duplicates and import BLAST output file into ClickHouse database
+    # import BLAST output file into ClickHouse database
     FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
@@ -1732,12 +1684,13 @@ Drops ( if it exists) and recreates database in ClickHouse (needs ClickHouse con
 =item import_blastout
 
  # options from command line
- FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+ FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -ho localhost -po 5625 -v
 
  # options from config
  FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
 
-Extracts columns (prot_id, ti, pgi, e_value with no duplicates), writes them to tmp file and imports that file into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
+Imports compressed BLAST output file (.gz needs pigz) into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
+It drops and recreates table where it will import.
 
 =item import_map
 

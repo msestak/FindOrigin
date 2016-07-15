@@ -7,7 +7,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # drop and recreate database (connection parameters in blastoutanalyze.cnf)
     FindOrigin.pm --mode=create_db -d test_db_here
 
-    # remove duplicates and import BLAST output file into ClickHouse database
+    # import BLAST output file into ClickHouse database
     FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
@@ -50,7 +50,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - create\_db
 
         # options from command line
-        FindOrigin.pm --mode=create_db -ho localhost -d test_db_here -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock --charset=ascii
+        FindOrigin.pm --mode=create_db -ho localhost -d test_db_here -po 8123
 
         # options from config
         FindOrigin.pm --mode=create_db -d test_db_here
@@ -60,12 +60,13 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_blastout
 
         # options from command line
-        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v -p msandbox -u msandbox -po 5625 -s /tmp/mysql_sandbox5625.sock
+        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -ho localhost -po 5625 -v
 
         # options from config
         FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_plus -v
 
-    Extracts columns (prot\_id, ti, pgi, e\_value with no duplicates), writes them to tmp file and imports that file into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
+    Imports compressed BLAST output file (.gz needs pigz) into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
+    It drops and recreates table where it will import.
 
 - import\_map
 

@@ -13,6 +13,7 @@ my @subs = qw(
   _exec_cmd
   _http_exec_query
   create_db
+  import_blastout
 );
 
 use_ok( $module, @subs);
