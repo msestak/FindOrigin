@@ -16,11 +16,8 @@ use Data::Printer;
 use Log::Log4perl;
 use File::Find::Rule;
 use Config::Std { def_sep => '=' };   #ClickHouse uses =
-use DBI;
-use DBD::mysql;
-use DateTime::Tiny;
-use POSIX qw(mkfifo);
 use HTTP::Tiny;
+use ClickHouse;
 
 our $VERSION = "0.01";
 
