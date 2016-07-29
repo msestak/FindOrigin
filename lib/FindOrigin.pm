@@ -16,6 +16,7 @@ use Data::Printer;
 use Log::Log4perl;
 use File::Find::Rule;
 use Config::Std { def_sep => '=' };   #ClickHouse uses =
+use POSIX qw(mkfifo);
 use HTTP::Tiny;
 use ClickHouse;
 
@@ -31,6 +32,7 @@ our @EXPORT_OK = qw{
   create_db
   import_blastout
   import_blastdb_stats
+  import_names
 
 };
 
@@ -886,32 +888,42 @@ sub _read_stats_file {
 # See Also   :
 sub import_names {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak ('import_names() needs a hash_ref' ) unless @_ == 1;
+    $log->logcroak('import_names() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
 
     my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
     my $names_tbl = path($infile)->basename;
-    $names_tbl =~ s/\./_/g;    #for files that have dots in name)
+    $names_tbl =~ s/\./_/g;    # for files that have dots in name
+    $names_tbl =~ s/_gz//g;    # for compressed files
 
     # get new handle
-    my $dbh = _http_exec_query($param_href);
+    my $ch = _get_ch($param_href);
 
     # create names table
-    my $create_names = sprintf( qq{
-    CREATE TABLE %s (
-    id INT UNSIGNED AUTO_INCREMENT NOT NULL,
-    ti INT UNSIGNED NOT NULL,
-    species_name VARCHAR(200) NOT NULL,
-    PRIMARY KEY(id),
-    KEY(ti),
-    KEY(species_name)
-    )}, $dbh->quote_identifier($names_tbl) );
-	_create_table( { table_name => $names_tbl, dbh => $dbh, query => $create_names } );
-	$log->trace("Report: $create_names");
+    my $create_names = qq{
+    CREATE TABLE $names_tbl (
+    ti UInt32,
+    species_name String,
+    name_syn String,
+    name_type String,
+    date Date  DEFAULT today() )
+    ENGINE=MergeTree (date, ti, 8192) };
 
-    #import table
-	my $column_list = 'ti, species_name, @dummy, @dummy';
-	_load_table_into($names_tbl, $infile, $dbh, $column_list);
+    _create_table_ch( { table_name => $names_tbl, ch => $ch, query => $create_names, %$param_href } );
+    $log->trace("Report: $create_names");
+
+    # import into table (in ClickHouse) from gzipped file (needs pigz)
+    my $import_query
+      = qq{INSERT INTO $param_href->{database}.$names_tbl (ti, species_name, name_syn, name_type) FORMAT TabSeparated};
+    my $import_cmd = qq{ pigz -c -d $infile | clickhouse-client --query "$import_query"};
+    _import_into_table_ch( { import_cmd => $import_cmd, table_name => $names_tbl, %$param_href } );
+
+    # check number of rows inserted
+    my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $names_tbl, %$param_href } );
+
+    # drop unnecessary columns
+	my @col_to_drop = (qw(name_syn name_type));
+	_drop_columns_ch( { ch => $ch, table_name => $names_tbl, col => \@col_to_drop, %$param_href } );
 
     return;
 }
@@ -1605,6 +1617,153 @@ sub import_blastdb {
 }
 
 
+## INTERNAL UTILITY ###
+# Usage      : my $clickhous_handle = _get_ch( $param_href );
+# Purpose    : gets a ClickHouse handle using http connection
+# Returns    : ClickHouse handle to execute queries
+# Parameters : database connection params
+# Throws     : ClickHouse module errors and warnings
+# Comments   : utility function to connect to Clickhouse
+# See Also   : _http_exec_query (which uses HTTP::Tiny for similar purpose
+sub _get_ch {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_get_ch() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $user     = defined $param_href->{user}     ? $param_href->{user}     : 'default';
+    my $password = defined $param_href->{password} ? $param_href->{password} : '';
+    my $host     = defined $param_href->{host}     ? $param_href->{host}     : 'localhost';
+    my $database = defined $param_href->{database} ? $param_href->{database} : 'default';
+    my $port     = defined $param_href->{port}     ? $param_href->{port}     : 8123;
+
+    my $ch = ClickHouse->new(
+        host     => $host,
+        port     => $port,
+        database => $database,
+        user     => $user,
+        password => $password,
+    );
+
+	#print Dumper $ch;
+
+    return $ch;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : _create_table_ch( { table_name => $table_info, ch => $ch, query => $create_query, %{$param_href} } );
+# Purpose    : it drops and recreates table in ClickHouse
+# Returns    : nothing
+# Parameters : hash_ref of table_name, dbh and query
+# Throws     : errors if it fails
+# Comments   : 
+# See Also   : 
+sub _create_table_ch {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_create_table_ch() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $table_name   = $param_href->{table_name} or $log->logcroak('no $table_name sent to _create_table_ch()!');
+    my $ch           = $param_href->{ch}         or $log->logcroak('no $ch sent to _create_table_ch()!');
+    my $create_query = $param_href->{query}      or $log->logcroak('no $query sent to _create_table_ch()!');
+
+	#create table in database specified in connection
+    my $drop_query = qq{ DROP TABLE IF EXISTS $param_href->{database}.$table_name };
+    eval { $ch->do($drop_query) };
+    $log->error("Error: dropping {$param_href->{database}.$table_name} failed: $@") if $@;
+    $log->trace("Action: {$param_href->{database}.$table_name} dropped successfully") unless $@;
+
+    eval { $ch->do($create_query) };
+    $log->error( "Error: creating {$param_href->{database}.$table_name} failed: $@" ) if $@;
+    $log->info( "Action: {$param_href->{database}.$table_name} created successfully" ) unless $@;
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : _import_into_table_ch( { import_cmd => $import_cmd, table_name => $tbl, %$param_href } );
+# Purpose    : import into ClickHouse using command line client
+# Returns    : nothing
+# Parameters : command to import
+# Throws     : croaks if wrong number of parameters
+# Comments   : needs pigz for gzip archives
+# See Also   : 
+sub _import_into_table_ch {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('import_into_table_ch() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+    my $import_cmd   = $param_href->{import_cmd} or $log->logcroak('no $import_cmd sent to _import_into_table_ch()!');
+
+	# import into table (in ClickHouse) from gzipped file (needs pigz)
+    my ( $stdout, $stderr, $exit ) = _capture_output( $import_cmd, $param_href );
+    if ( $exit == 0 ) {
+        $log->info("Action: import to {$param_href->{database}.$param_href->{table_name}} success");
+    }
+    else {
+        $log->error("Error: $import_cmd failed: $stderr");
+    }
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : my $row_cnt = _get_row_cnt_ch( { ch -> $ch, table_name => $names_tbl, %$param_href } );
+# Purpose    : to count number of rows in a table
+# Returns    : number of rows
+# Parameters : ClickHouse handle, table name and database name in params
+# Throws     : croaks if wrong number of parameters
+# Comments   : uses full column scan on shortest column to get row count
+# See Also   :
+sub _get_row_cnt_ch {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_get_row_cnt_ch() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # check number of rows inserted
+    my $query_cnt = qq{ SELECT count() FROM $param_href->{database}.$param_href->{table_name} };
+    my $rows;
+    eval { $rows = $param_href->{ch}->select($query_cnt); };
+    my $row_cnt = $rows->[0][0];
+    $log->error("Error: counting rows for {$param_href->{database}.$param_href->{table_name}} failed") if $@;
+    $log->info("Report: table {$param_href->{database}.$param_href->{table_name}} contains $row_cnt rows") unless $@;
+
+    return $row_cnt;
+}
+
+
+### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+# Usage      : _drop_columns_ch( { ch => $ch, table_name => $names_tbl, col => \@col_to_drop, %$param_href } );
+# Purpose    : to drop columns from table
+# Returns    : nothing
+# Parameters : databse handle, table name, columns to drop (aref), and rest of params
+# Throws     : croaks if wrong number of parameters
+# Comments   : fast because it drops files (columnar format)
+# See Also   :
+sub _drop_columns_ch {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_drop_columns_ch() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # drop unnecessary columns
+    my @col_to_drop    = @{ $param_href->{col} };
+    my $column_list    = join ", ", @col_to_drop;
+    my $droplist       = 'DROP COLUMN ' . join ", DROP COLUMN ", @col_to_drop;
+    my $drop_col_query = qq{ ALTER TABLE $param_href->{database}.$param_href->{table_name} $droplist };
+
+    eval { $param_href->{ch}->do($drop_col_query) };
+    $log->error(
+        "Error: dropping columns {$column_list} from {$param_href->{database}.$param_href->{table_name}} failed: $@")
+      if $@;
+    $log->info(
+        "Action: columns {$column_list} from {$param_href->{database}.$param_href->{table_name}} dropped successfully")
+      unless $@;
+
+    return;
+}
+
+
 
 1;
 __END__
@@ -1630,7 +1789,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
 
     # import names file for species_name
-    FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
+    FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
 
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
     FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
@@ -1711,10 +1870,10 @@ It can use PS and TI config sections.
 =item import_names
 
  # options from command line
- FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v -p msandbox -u msandbox -po 8123
+ FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
+ FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
 
 Imports names file (columns ti, species_name) into ClickHouse.
 

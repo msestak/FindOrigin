@@ -15,6 +15,7 @@ my @subs = qw(
   create_db
   import_blastout
   import_blastdb_stats
+  import_names
 );
 
 use_ok( $module, @subs);

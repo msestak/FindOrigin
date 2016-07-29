@@ -32,6 +32,9 @@
          }
       },
       "develop" : {
+         "recommends" : {
+            "Regexp::Debugger" : "0"
+         },
          "requires" : {
             "Test::CPAN::Meta" : "0",
             "Test::MinimumVersion::Fast" : "0.04",
@@ -42,7 +45,24 @@
       },
       "runtime" : {
          "requires" : {
-            "perl" : "5.010001"
+            "Capture::Tiny" : "0",
+            "Carp" : "0",
+            "ClickHouse" : "0",
+            "Config::Std" : "0",
+            "Data::Dumper" : "0",
+            "Data::Printer" : "0",
+            "Exporter" : "0",
+            "File::Find::Rule" : "0",
+            "File::Spec::Functions" : "0",
+            "Getopt::Long" : "0",
+            "HTTP::Tiny" : "0",
+            "Log::Log4perl" : "0",
+            "Path::Tiny" : "0",
+            "Pod::Usage" : "0",
+            "Regexp::Debugger" : "0",
+            "perl" : "5.010001",
+            "strict" : "0",
+            "warnings" : "0"
          }
       },
       "test" : {

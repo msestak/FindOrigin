@@ -17,7 +17,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
 
     # import names file for species_name
-    FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
+    FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
 
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
     FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
@@ -95,10 +95,10 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_names
 
         # options from command line
-        FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v -p msandbox -u msandbox -po 8123
+        FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -ho localhost -po 8123 -v
 
         # options from config
-        FindOrigin.pm --mode=import_names -if t/data/names.dmp.fmt.new  -d hs_plus -v
+        FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
 
     Imports names file (columns ti, species\_name) into ClickHouse.
 
