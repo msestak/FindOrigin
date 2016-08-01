@@ -14,8 +14,10 @@ my @subs = qw(
   _http_exec_query
   create_db
   import_blastout
+  import_map
   import_blastdb_stats
   import_names
+  blastout_uniq
 );
 
 use_ok( $module, @subs);

@@ -1,16 +1,30 @@
 [General]
-#in       = /home/msestak/prepare_blast/out/dr_plus/
+#in       = t/data/
 out      =  t/data/
-#infile   = /home/msestak/mysql-5.6.27-linux-glibc2.5-x86_64.tar.gz
-#outfile  = /home/msestak/prepare_blast/out/dr_04_02_2016.xlsx
+#infile   = t/data/
+#outfile  = t/data/
 
 [Database]
-host     = localhost
-database = test
+host      = localhost
+database  = test
 #user     = default
 #password = ''
-port     = 8123
+port      = 8123
 
+[Tables]
+blastout_tbl  = hs_1mil
+names_tbl     = names_dmp_fmt_new
+map_tbl       = hs3_map
+stats_ps_tbl  = analyze_hs_9606_all_ff_for_db_stats_ps
+stats_gen_tbl = analyze_hs_9606_all_ff_for_db_stats_genomes
+blastdb_tbl   = ''
+
+[Files]
+blastdb  = t/data/dbfull.gz
+blastout = t/data/hs_all_plus_21_12_2015.gz
+map      = t/data/hs3.phmap_names
+names    = t/data/names.dmp.fmt.new.gz
+stats    = t/data/analyze_hs_9606_all_ff_for_db
 
 [PS]
 1   =  1

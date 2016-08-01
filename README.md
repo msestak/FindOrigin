@@ -20,7 +20,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
 
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
-    FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
+    FindOrigin.pm --mode=blastout_uniq -d hs_plus -v
 
     # runs summary per phylostrata per species of BLAST output analysis.
     FindOrigin.pm --mode=report_per_ps -o -d hs_plus -v
@@ -102,15 +102,16 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 
     Imports names file (columns ti, species\_name) into ClickHouse.
 
-- analyze\_blastout
+- blastout\_uniq
 
         # options from command line
-        FindOrigin.pm --mode=analyze_blastout -d hs_plus -v -p msandbox -u msandbox -po 8123
+        perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
         # options from config
-        FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
+        perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
-    Runs BLAST output analysis - expanding every prot\_id to its tax\_id hits and species names. It creates 2 table: one with all tax\_ids fora each gene, and one with tax\_ids only that are for phylostratum of interest.
+    It creates a unique non-redundant blastout\_uniq table with only relevant information (prot\_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
+    From that blastout\_uniq\_tbl it creates report\_gene\_hit\_per\_species\_tbl which holds summary of per phylostrata per species of BLAST output analysis.
 
 - report\_per\_ps
 

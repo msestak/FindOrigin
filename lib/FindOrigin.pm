@@ -31,8 +31,10 @@ our @EXPORT_OK = qw{
   _http_exec_query
   create_db
   import_blastout
+  import_map
   import_blastdb_stats
   import_names
+  blastout_uniq
 
 };
 
@@ -80,10 +82,9 @@ sub run {
         import_map           => \&import_map,             # import Phylostratigraphic map with header
 		import_blastdb_stats => \&import_blastdb_stats,   # import BLAST database stats file
 		import_names         => \&import_names,           # import names file
-		analyze_blastout     => \&analyze_blastout,       # analyzes BLAST output file using mapn names and blastout tables
+		blastout_uniq        => \&blastout_uniq,          # analyzes BLAST output file using map, names and blastout tables
 		report_per_ps        => \&report_per_ps,          # make a report of previous analysis (BLAST hits per phylostratum)
 		report_per_ps_unique => \&report_per_ps_unique,   # add unique BLAST hits per species
-        import_blastout_full => \&import_blastout_full,   # import BLAST output with all columns
         import_blastdb       => \&import_blastdb,         # import BLAST database with all columns
 
     );
@@ -116,148 +117,160 @@ sub run {
 sub get_parameters_from_cmd {
 
     #no logger here
-	# setup config file location
-	my ($volume, $dir_out, $perl_script) = splitpath( $0 );
-	$dir_out = rel2abs($dir_out);
+    # setup config file location
+    my ( $volume, $dir_out, $perl_script ) = splitpath($0);
+    $dir_out = rel2abs($dir_out);
     my ($app_name) = $perl_script =~ m{\A(.+)\.(?:.+)\z};
-	$app_name = lc $app_name;
-    my $config_file = catfile($volume, $dir_out, $app_name . '.cnf' );
-	$config_file = canonpath($config_file);
+    $app_name = lc $app_name;
+    my $config_file = catfile( $volume, $dir_out, $app_name . '.cnf' );
+    $config_file = canonpath($config_file);
 
-	#read config to setup defaults
-	read_config($config_file => my %config);
-	#p(%config);
-	my $config_ps_href = $config{PS};
-	#p($config_ps_href);
-	my $config_ti_href = $config{TI};
-	#p($config_ti_href);
-	my $config_psname_href = $config{PSNAME};
+    #read config to setup defaults
+    read_config( $config_file => my %config );
 
-	#push all options into one hash no matter the section
-	my %opts;
-	foreach my $key (keys %config) {
-		# don't expand PS, TI or PSNAME
-		next if ( ($key eq 'PS') or ($key eq 'TI') or ($key eq 'PSNAME') );
-		# expand all other options
-		%opts = (%opts, %{ $config{$key} });
-	}
+    #p(%config);
+    my $config_ps_href = $config{PS};
 
-	# put config location to %opts
-	$opts{config} = $config_file;
+    #p($config_ps_href);
+    my $config_ti_href = $config{TI};
 
-	# put PS and TI section to %opts
-	$opts{ps} = $config_ps_href;
-	$opts{ti} = $config_ti_href;
-	$opts{psname} = $config_psname_href;
+    #p($config_ti_href);
+    my $config_psname_href = $config{PSNAME};
 
-	#cli part
-	my @arg_copy = @ARGV;
-	my (%cli, @mode);
-	$cli{quiet} = 0;
-	$cli{verbose} = 0;
-	$cli{argv} = \@arg_copy;
+    #push all options into one hash no matter the section
+    my %opts;
+    foreach my $key ( keys %config ) {
 
-	#mode, quiet and verbose can only be set on command line
+        # don't expand PS, TI or PSNAME
+        next if ( ( $key eq 'PS' ) or ( $key eq 'TI' ) or ( $key eq 'PSNAME' ) );
+
+        # expand all other options
+        %opts = ( %opts, %{ $config{$key} } );
+    }
+
+    # put config location to %opts
+    $opts{config} = $config_file;
+
+    # put PS and TI section to %opts
+    $opts{ps}     = $config_ps_href;
+    $opts{ti}     = $config_ti_href;
+    $opts{psname} = $config_psname_href;
+
+    #cli part
+    my @arg_copy = @ARGV;
+    my ( %cli, @mode );
+    $cli{quiet}   = 0;
+    $cli{verbose} = 0;
+    $cli{argv}    = \@arg_copy;
+
+    #mode, quiet and verbose can only be set on command line
     GetOptions(
-        'help|h'        => \$cli{help},
-        'man|m'         => \$cli{man},
-        'config|cnf=s'  => \$cli{config},
-        'in|i=s'        => \$cli{in},
-        'infile|if=s'   => \$cli{infile},
-        'out|o=s'       => \$cli{out},
-        'outfile|of=s'  => \$cli{outfile},
+        'help|h'       => \$cli{help},
+        'man|m'        => \$cli{man},
+        'config|cnf=s' => \$cli{config},
+        'in|i=s'       => \$cli{in},
+        'infile|if=s'  => \$cli{infile},
+        'out|o=s'      => \$cli{out},
+        'outfile|of=s' => \$cli{outfile},
 
-        'nodes|no=s'    => \$cli{nodes},
-        'names|na=s'    => \$cli{names},
-		'blastout=s'    => \$cli{blastout},
-		'blastout_analysis=s' => \$cli{blastout_analysis},
-		'map=s'         => \$cli{map},
-		'analyze_ps=s'  => \$cli{analyze_ps},
-		'analyze_genomes=s' => \$cli{analyze_genomes},
-		'report_per_ps=s' => \$cli{report_per_ps},
-        'tax_id|ti=i'   => \$cli{tax_id},
+        'blastout=s' => \$cli{blastout},
+        'blastdb=s'  => \$cli{blastdb},
+        'names|na=s' => \$cli{names},
+        'map=s'      => \$cli{map},
+        'stats'      => \$cli{stats},
 
-        'host|ho=s'      => \$cli{host},
-        'database|d=s'  => \$cli{database},
-        'user|u=s'      => \$cli{user},
-        'password|p=s'  => \$cli{password},
-        'port|po=i'     => \$cli{port},
-        'socket|s=s'    => \$cli{socket},
+        'tax_id|ti=i' => \$cli{tax_id},
+
+        'blastout_tbl=s'  => \$cli{blastout_tbl},
+        'blastdb_tbl=s'   => \$cli{blastdb_tbl},
+        'names_tbl=s'     => \$cli{names_tbl},
+        'map_tbl=s'       => \$cli{map_tbl},
+        'stats_ps_tbl=s'  => \$cli{stats_ps_tbl},
+        'stats_gen_tbl=s' => \$cli{stats_gen_tbl},
+        'report_per_ps=s' => \$cli{report_per_ps},
+
+        'host|ho=s'    => \$cli{host},
+        'database|d=s' => \$cli{database},
+        'user|u=s'     => \$cli{user},
+        'password|p=s' => \$cli{password},
+        'port|po=i'    => \$cli{port},
 
         'mode|mo=s{1,}' => \$cli{mode},       #accepts 1 or more arguments
         'quiet|q'       => \$cli{quiet},      #flag
         'verbose+'      => \$cli{verbose},    #flag
     ) or pod2usage( -verbose => 1 );
 
-	# help and man
-	pod2usage( -verbose => 1 ) if $cli{help};
-	pod2usage( -verbose => 2 ) if $cli{man};
+    # help and man
+    pod2usage( -verbose => 1 ) if $cli{help};
+    pod2usage( -verbose => 2 ) if $cli{man};
 
-	#you can specify multiple modes at the same time
-	@mode = split( /,/, $cli{mode} );
-	$cli{mode} = \@mode;
-	die 'No mode specified on command line' unless $cli{mode};   #DIES here if without mode
-	
-	#if not -q or --quiet print all this (else be quiet)
-	if ($cli{quiet} == 0) {
-		#print STDERR 'My @ARGV: {', join( "} {", @arg_copy ), '}', "\n";
-		#no warnings 'uninitialized';
-		#print STDERR "Extra options from config:", Dumper(\%opts);
-	
-		if ($cli{in}) {
-			say 'My input path: ', canonpath($cli{in});
-			$cli{in} = rel2abs($cli{in});
-			$cli{in} = canonpath($cli{in});
-			say "My absolute input path: $cli{in}";
-		}
-		if ($cli{infile}) {
-			say 'My input file: ', canonpath($cli{infile});
-			$cli{infile} = rel2abs($cli{infile});
-			$cli{infile} = canonpath($cli{infile});
-			say "My absolute input file: $cli{infile}";
-		}
-		if ($cli{out}) {
-			say 'My output path: ', canonpath($cli{out});
-			$cli{out} = rel2abs($cli{out});
-			$cli{out} = canonpath($cli{out});
-			say "My absolute output path: $cli{out}";
-		}
-		if ($cli{outfile}) {
-			say 'My outfile: ', canonpath($cli{outfile});
-			$cli{outfile} = rel2abs($cli{outfile});
-			$cli{outfile} = canonpath($cli{outfile});
-			say "My absolute outfile: $cli{outfile}";
-		}
-	}
-	else {
-		$cli{verbose} = -1;   #and logging is OFF
+    #you can specify multiple modes at the same time
+    @mode = split( /,/, $cli{mode} );
+    $cli{mode} = \@mode;
+    die 'No mode specified on command line' unless $cli{mode};    #DIES here if without mode
 
-		if ($cli{in}) {
-			$cli{in} = rel2abs($cli{in});
-			$cli{in} = canonpath($cli{in});
-		}
-		if ($cli{infile}) {
-			$cli{infile} = rel2abs($cli{infile});
-			$cli{infile} = canonpath($cli{infile});
-		}
-		if ($cli{out}) {
-			$cli{out} = rel2abs($cli{out});
-			$cli{out} = canonpath($cli{out});
-		}
-		if ($cli{outfile}) {
-			$cli{outfile} = rel2abs($cli{outfile});
-			$cli{outfile} = canonpath($cli{outfile});
-		}
-	}
+    #if not -q or --quiet print all this (else be quiet)
+    if ( $cli{quiet} == 0 ) {
+
+        #print STDERR 'My @ARGV: {', join( "} {", @arg_copy ), '}', "\n";
+        #no warnings 'uninitialized';
+        #print STDERR "Extra options from config:", Dumper(\%opts);
+
+        if ( $cli{in} ) {
+            say 'My input path: ', canonpath( $cli{in} );
+            $cli{in} = rel2abs( $cli{in} );
+            $cli{in} = canonpath( $cli{in} );
+            say "My absolute input path: $cli{in}";
+        }
+        if ( $cli{infile} ) {
+            say 'My input file: ', canonpath( $cli{infile} );
+            $cli{infile} = rel2abs( $cli{infile} );
+            $cli{infile} = canonpath( $cli{infile} );
+            say "My absolute input file: $cli{infile}";
+        }
+        if ( $cli{out} ) {
+            say 'My output path: ', canonpath( $cli{out} );
+            $cli{out} = rel2abs( $cli{out} );
+            $cli{out} = canonpath( $cli{out} );
+            say "My absolute output path: $cli{out}";
+        }
+        if ( $cli{outfile} ) {
+            say 'My outfile: ', canonpath( $cli{outfile} );
+            $cli{outfile} = rel2abs( $cli{outfile} );
+            $cli{outfile} = canonpath( $cli{outfile} );
+            say "My absolute outfile: $cli{outfile}";
+        }
+    }
+    else {
+        $cli{verbose} = -1;    #and logging is OFF
+
+        if ( $cli{in} ) {
+            $cli{in} = rel2abs( $cli{in} );
+            $cli{in} = canonpath( $cli{in} );
+        }
+        if ( $cli{infile} ) {
+            $cli{infile} = rel2abs( $cli{infile} );
+            $cli{infile} = canonpath( $cli{infile} );
+        }
+        if ( $cli{out} ) {
+            $cli{out} = rel2abs( $cli{out} );
+            $cli{out} = canonpath( $cli{out} );
+        }
+        if ( $cli{outfile} ) {
+            $cli{outfile} = rel2abs( $cli{outfile} );
+            $cli{outfile} = canonpath( $cli{outfile} );
+        }
+    }
 
     #copy all config opts
-	my %all_opts = %opts;
-	#update with cli options
-	foreach my $key (keys %cli) {
-		if ( defined $cli{$key} ) {
-			$all_opts{$key} = $cli{$key};
-		}
-	}
+    my %all_opts = %opts;
+
+    #update with cli options
+    foreach my $key ( keys %cli ) {
+        if ( defined $cli{$key} ) {
+            $all_opts{$key} = $cli{$key};
+        }
+    }
 
     return ( \%all_opts );
 }
@@ -521,7 +534,7 @@ sub import_blastout {
     $log->error("Error: creating $table failed!") unless $success_create;
     $log->debug("Action: table $table created successfully!") if $success_create;
 
-    # import into table (in ClickHouse) from gzipped file (needs pigz)
+    # import into table (in ClickHouse) from gziped file (needs pigz)
     my $import_query
       = qq{INSERT INTO $param_href->{database}.$table (prot_id, blast_hit, perc_id, alignment_length, mismatches, gap_openings, query_start, query_end, subject_start, subject_end, e_value, bitscore) FORMAT TabSeparated};
     my $import_cmd = qq{ pigz -c -d $infile | clickhouse-client --query "$import_query"};
@@ -912,7 +925,7 @@ sub import_names {
     _create_table_ch( { table_name => $names_tbl, ch => $ch, query => $create_names, %$param_href } );
     $log->trace("Report: $create_names");
 
-    # import into table (in ClickHouse) from gzipped file (needs pigz)
+    # import into table (in ClickHouse) from gziped file (needs pigz)
     my $import_query
       = qq{INSERT INTO $param_href->{database}.$names_tbl (ti, species_name, name_syn, name_type) FORMAT TabSeparated};
     my $import_cmd = qq{ pigz -c -d $infile | clickhouse-client --query "$import_query"};
@@ -922,192 +935,201 @@ sub import_names {
     my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $names_tbl, %$param_href } );
 
     # drop unnecessary columns
-	my @col_to_drop = (qw(name_syn name_type));
-	_drop_columns_ch( { ch => $ch, table_name => $names_tbl, col => \@col_to_drop, %$param_href } );
+    my @col_to_drop = (qw(name_syn name_type));
+    _drop_columns_ch( { ch => $ch, table_name => $names_tbl, col => \@col_to_drop, %$param_href } );
 
     return;
 }
 
 
 ### INTERFACE SUB ###
-# Usage      : --mode=analyze_blastout
-# Purpose    : is to create expanded table per phylostrata with ps, prot_id, ti, species_name
+# Usage      : --mode=blastout_uniq
+# Purpose    : creates unique blastout table for analysis (essence of blastout file) and report_gene_hits_per_species_tbl
 # Returns    : nothing
-# Parameters : 
+# Parameters : it needs blastout_tbl
 # Throws     : croaks if wrong number of parameters
-# Comments   : 
-# See Also   : 
-sub analyze_blastout {
+# Comments   : runs in around half a hour
+# See Also   :
+sub blastout_uniq {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('analyze_blastout() needs a $param_href') unless @_ == 1;
-    my ($p_href) = @_;
+    $log->logcroak('blastout_uniq() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
 
     # get new handle
-    my $dbh = _http_exec_query($p_href);
+    my $ch = _get_ch($param_href);
 
-    # create blastout_analysis table
-    my $blastout_analysis = sprintf( qq{
-    CREATE TABLE %s (
-	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
-	ps TINYINT UNSIGNED NOT NULL,
-	prot_id VARCHAR(40) NOT NULL,
-	ti INT UNSIGNED NOT NULL,
-	species_name VARCHAR(200) NULL,
-	PRIMARY KEY(id),
-	KEY(ti),
-	KEY(prot_id)
-	)}, $dbh->quote_identifier($p_href->{blastout_analysis}) );
-	_create_table( { table_name => $p_href->{blastout_analysis}, dbh => $dbh, query => $blastout_analysis } );
-	$log->trace("Report: $blastout_analysis");
+    # get table name
+    my $blastout_uniq_tbl = "$param_href->{blastout_tbl}_uniq";
 
-#	# create blastout_analysis_all table
-#    my $blastout_analysis_all = sprintf( qq{
-#    CREATE TABLE %s (
-#	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
-#	ps TINYINT UNSIGNED NOT NULL,
-#	prot_id VARCHAR(40) NOT NULL,
-#	ti INT UNSIGNED NOT NULL,
-#	species_name VARCHAR(200) NULL,
-#	PRIMARY KEY(id),
-#	KEY(ti),
-#	KEY(prot_id)
-#	)}, $dbh->quote_identifier("$p_href->{blastout_analysis}_all") );
-#	_create_table( { table_name => "$p_href->{blastout_analysis}_all", dbh => $dbh, query => $blastout_analysis_all } );
-#	$log->trace("Report: $blastout_analysis_all");
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blastout_uniq_tbl, ch => $ch, %{$param_href} } );
 
-    # get columns from MAP table to iterate on phylostrata
-	my $select_ps_from_map = sprintf( qq{
-	SELECT DISTINCT phylostrata FROM %s ORDER BY phylostrata
-	}, $dbh->quote_identifier($p_href->{map}) );
-	
-	# get column phylostrata to array to iterate insert query on them
-	my @ps = map { $_->[0] } @{ $dbh->selectall_arrayref($select_ps_from_map) };
-	$log->trace( 'Returned phylostrata: {', join('}{', @ps), '}' );
-	
-	# to insert blastout_analysis and blastout_analysis_all table
-	_insert_blastout_analysis( { dbh => $dbh, phylostrata => \@ps, %{$p_href} } );
-	
-    $dbh->disconnect;
-    return;
-}
+    # create blastout_uniq table ('\\\\d+' is '\\d+' in ClickHouse)
+    my $blastout_uniq_query = qq{
+    CREATE TABLE $param_href->{database}.$blastout_uniq_tbl
+    ENGINE=MergeTree(date, (prot_id, ti), 8192)
+    AS SELECT DISTINCT prot_id, toUInt32(extract(substring(blast_hit, 28,20), '\\\\d+')) AS ti, date
+    FROM $param_href->{database}.$param_href->{blastout_tbl}
+    };
+    $log->trace("$blastout_uniq_query");
 
+    eval { $ch->do($blastout_uniq_query) };
+    $log->error("Error: creating {$param_href->{database}.$blastout_uniq_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blastout_uniq_tbl} created successfully") unless $@;
 
-### INTERNAL UTILITY ###
-# Usage      : _insert_blastout_analysis( { dbh => $dbh, pphylostrata => \@ps, %{$p_href} } );
-# Purpose    : to insert blastout_analysis and blastout_analysis_all table
-# Returns    : nothing
-# Parameters : 
-# Throws     : croaks if wrong number of parameters
-# Comments   : part of --mode=blastout_analyze
-# See Also   : 
-sub _insert_blastout_analysis {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('_insert_blastout_analysis() needs a $param_href') unless @_ == 1;
-    my ($p_href) = @_;
+    # check number of rows inserted
+    my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $blastout_uniq_tbl, %$param_href } );
 
-#	# create insert query for each phylostratum (blastout_analysis_all table)
-#	my $insert_ps_query_all = qq{
-#	INSERT INTO $p_href->{blastout_analysis}_all (ps, prot_id, ti, species_name)
-#		SELECT DISTINCT map.phylostrata, map.prot_id, blout.ti, na.species_name
-#		FROM $p_href->{blastout} AS blout
-#		INNER JOIN $p_href->{map} AS map ON blout.prot_id = map.prot_id
-#		INNER JOIN $p_href->{names} AS na ON blout.ti = na.ti
-#		WHERE map.phylostrata = ?
-#	};
-#	my $sth_all = $p_href->{dbh}->prepare($insert_ps_query_all);
-#	$log->trace("Report: $insert_ps_query_all");
-#	
-#	#iterate for each phylostratum and insert into blastout_analysis_all
-#	foreach my $ps (@{ $p_href->{phylostrata} }) {
-#	    eval { $sth_all->execute($ps) };
-#		my $rows = $sth_all->rows;
-#	    $log->error( qq{Error: inserting into "$p_href->{blastout_analysis}_all" failed for ps:$ps: $@} ) if $@;
-#	    $log->debug( qq{Action: table "$p_href->{blastout_analysis}_all" for ps:$ps inserted $rows rows} ) unless $@;
-#	}
+    # PART 1: ADD phylostrata from map table
+    my $blout_ps_tbl = "$param_href->{blastout_tbl}_uniq_ps";
 
-	# create insert query for each phylostratum (blastout_analysis table)
-	my $insert_ps_query = qq{
-	INSERT INTO $p_href->{blastout_analysis} (ps, prot_id, ti, species_name)
-		SELECT DISTINCT map.phylostrata, map.prot_id, blout.ti, na.species_name
-		FROM $p_href->{blastout} AS blout
-		INNER JOIN $p_href->{map} AS map ON blout.prot_id = map.prot_id
-		INNER JOIN $p_href->{names} AS na ON blout.ti = na.ti
-		INNER JOIN $p_href->{analyze_genomes} AS an ON blout.ti = an.ti
-		WHERE map.phylostrata = ? AND an.phylostrata = ?
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blout_ps_tbl, ch => $ch, %{$param_href} } );
+
+    # create table
+    my $blout_uniq_ps_q = qq{
+	CREATE TABLE  $param_href->{database}.$blout_ps_tbl
+	ENGINE=MergeTree (date, (ps, prot_id, ti), 8192)
+	AS SELECT ps, prot_id_bl AS prot_id, ti, date_bl AS date
+	FROM (SELECT prot_id AS prot_id_bl, ti, date as date_bl FROM $param_href->{database}.$blastout_uniq_tbl)
+	ALL INNER JOIN
+	(SELECT prot_id, ps FROM $param_href->{database}.$param_href->{map_tbl})
+	USING prot_id
 	};
-	my $sth = $p_href->{dbh}->prepare($insert_ps_query);
-	$log->trace("Report: $insert_ps_query");
-	
-	#iterate for each phylostratum and insert into blastout_analysis
-	foreach my $ps (@{ $p_href->{phylostrata} }) {
-	    eval { $sth->execute($ps, $ps) };
-	    my $rows = $sth->rows;
-	    $log->error( qq{Error: inserting into $p_href->{blastout_analysis} failed for ps:$ps: $@} ) if $@;
-	    $log->debug( qq{Action: table $p_href->{blastout_analysis} for ps:$ps inserted $rows rows} ) unless $@;
-	}
+    $log->trace("$blout_uniq_ps_q");
 
-    return;
-}
+    eval { $ch->do($blout_uniq_ps_q) };
+    $log->error("Error: creating {$param_href->{database}.$blout_ps_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blout_ps_tbl} created successfully") unless $@;
 
+    # check number of rows inserted
+    my $row_cnt_ps = _get_row_cnt_ch( { ch => $ch, table_name => "$blout_ps_tbl", %$param_href } );
 
-### INTERFACE SUB ###
-# Usage      : --mode=report_per_ps
-# Purpose    : reports blast output analysis per species (ti) per phylostrata
-# Returns    : nothing
-# Parameters : 
-# Throws     : croaks if wrong number of parameters
-# Comments   : 
-# See Also   : 
-sub report_per_ps {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('report_per_ps() needs a $p_href') unless @_ == 1;
-    my ($p_href) = @_;
+    # PART 2: SELECT phylostrata-tax_id from right phylostrata based on analyze
+    my $blout_analyze_tbl = "$param_href->{blastout_tbl}_uniq_analyze";
 
-    my $dbh = _http_exec_query($p_href);
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blout_analyze_tbl, ch => $ch, %{$param_href} } );
 
-	# name the report_per_ps table
-	my $report_per_ps_tbl = "$p_href->{report_per_ps}";
-
-	# create summary per phylostrata per species
-    my $report_per_ps = sprintf( qq{
-    CREATE TABLE %s (
-	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
-	ps TINYINT UNSIGNED NOT NULL,
-	ti INT UNSIGNED NOT NULL,
-	species_name VARCHAR(200) NULL,
-	gene_hits_per_species INT UNSIGNED NOT NULL,
-	gene_list MEDIUMTEXT NOT NULL,
-	PRIMARY KEY(id),
-	KEY(species_name)
-	)}, $dbh->quote_identifier($report_per_ps_tbl) );
-	_create_table( { table_name => $report_per_ps_tbl, dbh => $dbh, query => $report_per_ps } );
-	$log->trace("Report: $report_per_ps");
-
-	#for large GROUP_CONCAT selects
-	my $value = 16_777_215;
-	my $variables_query = qq{
-	SET SESSION group_concat_max_len = $value
+    my $blout_analyze_q = qq{
+	CREATE TABLE $param_href->{database}.$blout_analyze_tbl
+	ENGINE=MergeTree (date, (ps, prot_id, ti), 8192)
+	AS SELECT ps, prot_id, ti_bl AS ti, date_bl AS date
+	FROM (SELECT ps, prot_id, ti AS ti_bl, date as date_bl FROM $param_href->{database}.$blout_ps_tbl)
+	ALL INNER JOIN
+	(SELECT ps AS an_ps, ti  FROM $param_href->{database}.$param_href->{stats_gen_tbl})
+	USING ti WHERE an_ps == ps
 	};
-	eval { $dbh->do($variables_query) };
-    $log->error( "Error: changing SESSION group_concat_max_len=$value failed: $@" ) if $@;
-    $log->debug( "Report: changing SESSION group_concat_max_len=$value succeeded" ) unless $@;
+    $log->trace("$blout_analyze_q");
 
-	# create insert query
-	my $insert_report_per_ps = sprintf( qq{
-		INSERT INTO %s (ps, ti, species_name, gene_hits_per_species, gene_list)
-		SELECT ps, ti, species_name, COUNT(species_name) AS gene_hits_per_species, 
-		GROUP_CONCAT(prot_id ORDER BY prot_id) AS gene_list
-		FROM %s
-		GROUP BY species_name
-		ORDER BY ps, gene_hits_per_species, species_name
-	}, $dbh->quote_identifier($report_per_ps_tbl), $dbh->quote_identifier($p_href->{blastout_analysis}) );
-	my $rows;
-	eval { $rows = $dbh->do($insert_report_per_ps) };
-    $log->error( "Error: inserting into $report_per_ps_tbl failed: $@" ) if $@;
-    $log->debug( "Action: table $report_per_ps_tbl inserted $rows rows" ) unless $@;
-	$log->trace("$insert_report_per_ps");
+    eval { $ch->do($blout_analyze_q) };
+    $log->error("Error: creating {$param_href->{database}.$blout_analyze_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blout_analyze_tbl} created successfully") unless $@;
 
-    $dbh->disconnect;
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$blout_analyze_tbl", %$param_href } );
+
+    # PART 3: ADD species_name from names tbl
+    my $blout_species_tbl = "$param_href->{blastout_tbl}_uniq_species";
+
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blout_species_tbl, ch => $ch, %{$param_href} } );
+
+    my $blout_species_q = qq{
+	CREATE TABLE $param_href->{database}.$blout_species_tbl
+	ENGINE=MergeTree (date, (ps, prot_id, ti), 8192)
+	AS SELECT ps, prot_id, ti_bl AS ti, species_name, date_bl AS date
+	FROM (SELECT ps, prot_id, ti AS ti_bl, date as date_bl FROM $param_href->{database}.$blout_analyze_tbl)
+	ALL INNER JOIN
+	(SELECT ti, species_name FROM $param_href->{database}.$param_href->{names_tbl})
+	USING ti
+	};
+    $log->trace("$blout_species_q");
+
+    eval { $ch->do($blout_species_q) };
+    $log->error("Error: creating {$param_href->{database}.$blout_species_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blout_species_tbl} created successfully") unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$blout_species_tbl", %$param_href } );
+
+    # PART 4: CALCULATE count() as gene_hits_per_species
+    my $report_gene_hits_per_species_tbl = "$param_href->{blastout_tbl}_report_per_species";
+
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $report_gene_hits_per_species_tbl, ch => $ch, %{$param_href} } );
+
+	# POSSIBLE BUG with this date column (if calculation happens around midnight) because of GROUP BY splitting on date
+    my $report_gene_hits_per_species_q = qq{
+	CREATE TABLE $param_href->{database}.$report_gene_hits_per_species_tbl
+	ENGINE=MergeTree (date, (ps, ti), 8192)
+	AS SELECT ps, ti, species_name, count() AS gene_hits_per_species, today() AS date
+	FROM $param_href->{database}.$blout_species_tbl
+	GROUP BY ps, ti, species_name, date
+	ORDER BY ps, gene_hits_per_species DESC
+	};
+    $log->trace("$report_gene_hits_per_species_q");
+
+    eval { $ch->do($report_gene_hits_per_species_q) };
+    $log->error("Error: creating {$param_href->{database}.$report_gene_hits_per_species_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$report_gene_hits_per_species_tbl} created successfully") unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$report_gene_hits_per_species_tbl", %$param_href } );
+
+    # PART 5: DROP EXTRA TABLES
+    #_drop_table_only_ch( { table_name => $blastout_uniq_tbl, ch => $ch, %{$param_href} } );
+    #_drop_table_only_ch( { table_name => $blout_ps_tbl,      ch => $ch, %{$param_href} } );
+    #_drop_table_only_ch( { table_name => $blout_analyze_tbl, ch => $ch, %{$param_href} } );
+
+	# PART 6: create genelist and insert it into table
+	# create table that will hold updated info (with genelists)
+    _drop_table_only_ch( { table_name => "${report_gene_hits_per_species_tbl}2", ch => $ch, %{$param_href} } );
+	my $report_gene_hits_per_species_q2 = qq{
+	CREATE TABLE $param_href->{database}.${report_gene_hits_per_species_tbl}2 (
+    ps UInt8,
+    ti UInt32,
+    species_name String,
+    gene_hits_per_species UInt64,
+    genelist String,
+    date Date  DEFAULT today() )
+	ENGINE=MergeTree (date, (ps, ti), 8192)
+	};
+    $log->trace("$report_gene_hits_per_species_q2");
+
+    eval { $ch->do($report_gene_hits_per_species_q2) };
+    $log->error("Error: creating {$param_href->{database}.${report_gene_hits_per_species_tbl}2} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.${report_gene_hits_per_species_tbl}2} created successfully") unless $@;
+
+	# open filehandle to scalar to write to it and import from it to database
+	my $scalar;
+	open (my $dbin_fh, ">", \$scalar) or $log->logdie("Error: can't open scalar variable for writing");
+
+	#retrieve entire table to modify it and return back
+	my $rows = $ch->select("SELECT ps, ti, species_name, gene_hits_per_species FROM $param_href->{database}.$report_gene_hits_per_species_tbl");
+    foreach my $row (@$rows) {
+		my ($ps, $ti, $species_name, $gene_hits) = @$row;
+		print "TABLE$ps\t$ti\t$species_name\t{$gene_hits}\n";
+		
+		# get list of prot_ids associated with specific ti
+		my $prot_ids =  $ch->select("SELECT prot_id FROM $param_href->{database}.$blout_species_tbl WHERE ti = $ti");
+		my @genes;
+		foreach my $prot_id (@$prot_ids) {
+			push @genes, @$prot_id;
+		}
+		my $genelist = join ', ', @genes;
+
+		# print to scalar filehandle
+		print {$dbin_fh} "$ps\t$ti\t$species_name\t$gene_hits\t$genelist\n";
+    }
+
+	# import back to database
+    my $import_query
+      = qq{INSERT INTO $param_href->{database}.${report_gene_hits_per_species_tbl}2 (ps, ti, species_name, gene_hits_per_species, genelist) FORMAT TabSeparated VALUES ($scalar)};
+    $ch->do($import_query);
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "${report_gene_hits_per_species_tbl}2", %$param_href } );
 
     return;
 }
@@ -1262,177 +1284,6 @@ sub report_per_ps_unique {
 }
 
 
-
-### INTERFACE SUB ###
-# Usage      : --mode=import_blastout_full
-# Purpose    : loads full BLAST output to ClickHouse database (no duplicates)
-# Returns    : nothing
-# Parameters : ( $param_href )
-# Throws     : croaks for parameters
-# Comments   : it removes duplicates (same tax_id) per gene
-# See Also   : utility sub _extract_blastout()
-sub import_blastout_full {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'import_blastout_full() needs a hash_ref' ) unless @_ == 1;
-    my ($param_href) = @_;
-
-    my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
-    my $table           = path($infile)->basename;
-    $table =~ s/\./_/g;    #for files that have dots in name
-    my $blastout_import = path($infile . "_formated");
-
-    #first shorten the blastout file and extract useful columns
-    _extract_blastout_full( { infile => $infile, blastout_import => $blastout_import } );
-
-    #get new handle
-    my $dbh = _http_exec_query($param_href);
-
-    #create table
-    my $create_query = qq{
-    CREATE TABLE IF NOT EXISTS $table (
-	id INT UNSIGNED AUTO_INCREMENT NOT NULL,
-    prot_id VARCHAR(40) NOT NULL,
-    ti INT UNSIGNED NOT NULL,
-    pgi CHAR(19) NOT NULL,
-    hit VARCHAR(40) NOT NULL,
-    col3 FLOAT NOT NULL,
-    col4 INT UNSIGNED NOT NULL,
-    col5 INT UNSIGNED NOT NULL,
-    col6 INT UNSIGNED NOT NULL,
-    col7 INT UNSIGNED NOT NULL,
-    col8 INT UNSIGNED NOT NULL,
-    col9 INT UNSIGNED NOT NULL,
-    col10 INT UNSIGNED NOT NULL,
-    evalue REAL NOT NULL,
-	bitscore FLOAT NOT NULL,
-	PRIMARY KEY(id)
-    )};
-    _create_table( { table_name => $table, dbh => $dbh, query => $create_query } );
-
-    #import table
-    my $load_query = qq{
-    LOAD DATA INFILE '$blastout_import'
-    INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
-    LINES TERMINATED BY '\n' 
-    (prot_id, ti, pgi, hit, col3, col4, col5, col6, col7, col8, col9, col10, evalue, bitscore)
-    };
-	$log->trace("$load_query");
-    eval { $dbh->do( $load_query, { async => 1 } ) };
-
-    # check status while running
-    my $dbh_check             = _http_exec_query($param_href);
-    until ( $dbh->mysql_async_ready ) {
-        my $processlist_query = qq{
-        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-        WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
-        };
-        my ( $time, $state );
-        my $sth = $dbh_check->prepare($processlist_query);
-        $sth->execute($param_href->{database});
-        $sth->bind_columns( \( $time, $state ) );
-        while ( $sth->fetchrow_arrayref ) {
-            my $print = sprintf( "Time running:%d sec\tSTATE:%s\n", $time, $state );
-            $log->trace( $print );
-            sleep 10;
-        }
-    }
-    my $rows;
-	eval { $rows = $dbh->mysql_async_result; };
-    $log->info( "Action: import inserted $rows rows!" ) unless $@;
-    $log->error( "Error: loading $table failed: $@" ) if $@;
-
-    # add index
-    my $alter_query = qq{
-    ALTER TABLE $table ADD INDEX protx(prot_id), ADD INDEX tix(ti)
-    };
-    eval { $dbh->do( $alter_query, { async => 1 } ) };
-
-    # check status while running
-    my $dbh_check2            = _http_exec_query($param_href);
-    until ( $dbh->mysql_async_ready ) {
-        my $processlist_query = qq{
-        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-        WHERE DB = ? AND INFO LIKE 'ALTER%';
-        };
-        my ( $time, $state );
-        my $sth = $dbh_check2->prepare($processlist_query);
-        $sth->execute($param_href->{database});
-        $sth->bind_columns( \( $time, $state ) );
-        while ( $sth->fetchrow_arrayref ) {
-            my $print = sprintf( "Time running:%d sec\tSTATE:%s\n", $time, $state );
-            $log->trace( $print );
-            sleep 10;
-        }
-    }
-
-    #report success or failure
-    $log->error( "Error: adding index tix on $table failed: $@" ) if $@;
-    $log->info( "Action: Indices protx and tix on $table added successfully!" ) unless $@;
-	
-	#delete file used to import so it doesn't use disk space
-	#unlink $blastout_import and $log->warn("File $blastout_import unlinked!");
-
-    return;
-}
-
-### INTERNAL UTILITY ###
-# Usage      : _extract_blastout_full( { infile => $infile, blastout_import => $blastout_import } );
-# Purpose    : removes duplicates per tax_id from blastout file and saves blastout into file
-# Returns    : nothing
-# Parameters : ($param_href)
-# Throws     : croaks for parameters
-# Comments   : needed for --mode=import_blastout_full()
-# See Also   : import_blastout_full()
-sub _extract_blastout_full {
-    my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'extract_blastout_full() needs {hash_ref}' ) unless @_ == 1;
-    my ($extract_href) = @_;
-
-    open( my $blastout_fh, "< :encoding(ASCII)", $extract_href->{infile} ) or $log->logdie( "Error: BLASTout file not found:$!" );
-    open( my $blastout_fmt_fh, "> :encoding(ASCII)", $extract_href->{blastout_import} ) or $log->logdie( "Error: BLASTout file can't be created:$!" );
-
-    # needed for filtering duplicates
-    # idea is that duplicates come one after another
-    my $prot_prev    = '';
-    my $pgi_prev     = 0;
-    my $ti_prev      = 0;
-	my $formated_cnt = 0;
-
-    # in blastout
-    #ENSG00000151914|ENSP00000354508    pgi|34252924|ti|9606|pi|0|  100.00  7461    0   0   1   7461    1   7461    0.0 1.437e+04
-    
-	$log->debug( "Report: started processing of $extract_href->{infile}" );
-    local $.;
-    while ( <$blastout_fh> ) {
-        chomp;
-
-		my ($prot_id, $hit, $col3, $col4, $col5, $col6, $col7, $col8, $col9, $col10, $evalue, $bitscore) = split "\t", $_;
-		my ($pgi, $ti) = $hit =~ m{pgi\|(\d+)\|ti\|(\d+)\|pi\|(?:\d+)\|};
-
-        # check for duplicates for same gene_id with same tax_id and pgi that differ only in e_value
-        if (  "$prot_prev" . "$pgi_prev" . "$ti_prev" ne "$prot_id" . "$pgi" . "$ti" ) {
-            say {$blastout_fmt_fh} $prot_id, "\t", $ti, "\t", $pgi,  "\t$hit\t$col3\t$col4\t$col5\t$col6\t$col7\t$col8\t$col9\t$col10\t$evalue\t$bitscore";
-			$formated_cnt++;
-        }
-
-        # set found values for next line to check duplicates
-        $prot_prev = $prot_id;
-        $pgi_prev  = $pgi;
-        $ti_prev   = $ti;
-
-		# show progress
-        if ($. % 1000000 == 0) {
-            $log->trace( "$. lines processed!" );
-        }
-
-    }   # end while reading blastout
-
-    $log->info( "Report: file $extract_href->{blastout_import} printed successfully with $formated_cnt lines (from $. original lines)" );
-
-    return;
-}
-
-
 ### INTERFACE SUB ###
 # Usage      : --mode=import_blastdb
 # Purpose    : loads BLAST database to ClickHouse database from compressed file using named pipe
@@ -1464,7 +1315,7 @@ sub import_blastdb {
 	mkfifo( $load_file, 0666 ) or $log->logdie( "Error: mkfifo $load_file failed: $!" );
 
 	# open blastdb compressed file for reading
-	open my $blastdb_fh, "<:gzip", $infile or $log->logdie( "Can't open gzipped file $infile: $!" );
+	open my $blastdb_fh, "<:gzip", $infile or $log->logdie( "Can't open gziped file $infile: $!" );
 
 	#start 2 processes (one for Perl-child and ClickHouse-parent)
     my $pid = fork;
@@ -1618,7 +1469,7 @@ sub import_blastdb {
 
 
 ## INTERNAL UTILITY ###
-# Usage      : my $clickhous_handle = _get_ch( $param_href );
+# Usage      : my $clickhouse_handle = _get_ch( $param_href );
 # Purpose    : gets a ClickHouse handle using http connection
 # Returns    : ClickHouse handle to execute queries
 # Parameters : database connection params
@@ -1682,6 +1533,32 @@ sub _create_table_ch {
 
 
 ### INTERNAL UTILITY ###
+# Usage      : _drop_table_only_ch( { table_name => $table, ch => $ch, %{$param_href} } );
+# Purpose    : it drops table in ClickHouse
+# Returns    : nothing
+# Parameters : hash_ref of table_name, dbh and query
+# Throws     : errors if it fails
+# Comments   :
+# See Also   :
+sub _drop_table_only_ch {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_drop_table_only_ch() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $table_name = $param_href->{table_name} or $log->logcroak('no $table_name sent to _drop_table_only_ch()!');
+    my $ch         = $param_href->{ch}         or $log->logcroak('no $ch sent to _drop_table_only_ch()!');
+
+    # drop table in database specified in connection
+    my $drop_query = qq{ DROP TABLE IF EXISTS $param_href->{database}.$table_name };
+    eval { $ch->do($drop_query) };
+    $log->error("Error: dropping {$param_href->{database}.$table_name} failed: $@") if $@;
+    $log->trace("Action: {$param_href->{database}.$table_name} dropped successfully") unless $@;
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
 # Usage      : _import_into_table_ch( { import_cmd => $import_cmd, table_name => $tbl, %$param_href } );
 # Purpose    : import into ClickHouse using command line client
 # Returns    : nothing
@@ -1695,7 +1572,7 @@ sub _import_into_table_ch {
     my ($param_href) = @_;
     my $import_cmd   = $param_href->{import_cmd} or $log->logcroak('no $import_cmd sent to _import_into_table_ch()!');
 
-	# import into table (in ClickHouse) from gzipped file (needs pigz)
+	# import into table (in ClickHouse) from gziped file (needs pigz)
     my ( $stdout, $stderr, $exit ) = _capture_output( $import_cmd, $param_href );
     if ( $exit == 0 ) {
         $log->info("Action: import to {$param_href->{database}.$param_href->{table_name}} success");
@@ -1792,7 +1669,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
 
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
-    FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
+    FindOrigin.pm --mode=blastout_uniq -d hs_plus -v
 
     # runs summary per phylostrata per species of BLAST output analysis.
     FindOrigin.pm --mode=report_per_ps -o -d hs_plus -v
@@ -1877,16 +1754,16 @@ It can use PS and TI config sections.
 
 Imports names file (columns ti, species_name) into ClickHouse.
 
-=item analyze_blastout
+=item blastout_uniq
 
  # options from command line
- FindOrigin.pm --mode=analyze_blastout -d hs_plus -v -p msandbox -u msandbox -po 8123
+ perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
  # options from config
- FindOrigin.pm --mode=analyze_blastout -d hs_plus -v
+ perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
-Runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names. It creates 2 table: one with all tax_ids fora each gene, and one with tax_ids only that are for phylostratum of interest.
-
+It creates a unique non-redundant blastout_uniq table with only relevant information (prot_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
+From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl which holds summary of per phylostrata per species of BLAST output analysis.
 
 =item report_per_ps
 
