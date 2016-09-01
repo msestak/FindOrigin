@@ -950,7 +950,7 @@ sub import_names {
 # Throws     : croaks if wrong number of parameters
 # Comments   : runs in around half a hour
 # See Also   :
-sub blastout_uniq {
+sub blastout_uniq_orig {
     my $log = Log::Log4perl::get_logger("main");
     $log->logcroak('blastout_uniq() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
@@ -1133,6 +1133,223 @@ sub blastout_uniq {
 
     return;
 }
+
+### INTERFACE SUB ###
+# Usage      : --mode=blastout_uniq
+# Purpose    : creates unique blastout table for analysis (essence of blastout file) and report_gene_hits_per_species_tbl
+# Returns    : nothing
+# Parameters : it needs blastout_tbl
+# Throws     : croaks if wrong number of parameters
+# Comments   : runs in around half a hour
+# See Also   :
+sub blastout_uniq {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('blastout_uniq() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # get new handle
+    my $ch = _get_ch($param_href);
+
+    # get table name
+    my $blastout_uniq_tbl = "$param_href->{blastout_tbl}_uniq";
+
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blastout_uniq_tbl, ch => $ch, %{$param_href} } );
+
+    # create blastout_uniq table ('\\\\d+' is '\\d+' in ClickHouse)
+    my $blastout_uniq_query = qq{
+    CREATE TABLE $param_href->{database}.$blastout_uniq_tbl
+    ENGINE=MergeTree(date, (prot_id, ti), 8192)
+    AS SELECT DISTINCT prot_id, toUInt32(extract(substring(blast_hit, 28,20), '\\\\d+')) AS ti, date
+    FROM $param_href->{database}.$param_href->{blastout_tbl}
+    };
+    $log->trace("$blastout_uniq_query");
+
+    eval { $ch->do($blastout_uniq_query) };
+    $log->error("Error: creating {$param_href->{database}.$blastout_uniq_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blastout_uniq_tbl} created successfully") unless $@;
+
+    # check number of rows inserted
+    my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $blastout_uniq_tbl, %$param_href } );
+
+    # PART 1: ADD phylostrata from map table
+    my $blout_ps_tbl = "$param_href->{blastout_tbl}_uniq_ps";
+
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blout_ps_tbl, ch => $ch, %{$param_href} } );
+
+    # create table
+    my $blout_uniq_ps_q = qq{
+	CREATE TABLE  $param_href->{database}.$blout_ps_tbl
+	ENGINE=MergeTree (date, (ps, prot_id, ti), 8192)
+	AS SELECT ps, prot_id_bl AS prot_id, ti, date_bl AS date
+	FROM (SELECT prot_id AS prot_id_bl, ti, date as date_bl FROM $param_href->{database}.$blastout_uniq_tbl)
+	ALL INNER JOIN
+	(SELECT prot_id, ps FROM $param_href->{database}.$param_href->{map_tbl})
+	USING prot_id
+	};
+    $log->trace("$blout_uniq_ps_q");
+
+    eval { $ch->do($blout_uniq_ps_q) };
+    $log->error("Error: creating {$param_href->{database}.$blout_ps_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blout_ps_tbl} created successfully") unless $@;
+
+    # check number of rows inserted
+    my $row_cnt_ps = _get_row_cnt_ch( { ch => $ch, table_name => "$blout_ps_tbl", %$param_href } );
+
+    # PART 2: SELECT phylostrata-tax_id from right phylostrata based on analyze
+    my $blout_analyze_tbl = "$param_href->{blastout_tbl}_uniq_analyze";
+
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blout_analyze_tbl, ch => $ch, %{$param_href} } );
+
+    my $blout_analyze_q = qq{
+	CREATE TABLE $param_href->{database}.$blout_analyze_tbl
+	ENGINE=MergeTree (date, (ps, prot_id, ti), 8192)
+	AS SELECT ps, prot_id, ti_bl AS ti, date_bl AS date
+	FROM (SELECT ps, prot_id, ti AS ti_bl, date as date_bl FROM $param_href->{database}.$blout_ps_tbl)
+	ALL INNER JOIN
+	(SELECT ps AS an_ps, ti  FROM $param_href->{database}.$param_href->{stats_gen_tbl})
+	USING ti WHERE an_ps == ps
+	};
+    $log->trace("$blout_analyze_q");
+
+    eval { $ch->do($blout_analyze_q) };
+    $log->error("Error: creating {$param_href->{database}.$blout_analyze_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blout_analyze_tbl} created successfully") unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$blout_analyze_tbl", %$param_href } );
+
+    # PART 3: ADD species_name from names tbl
+    my $blout_species_tbl = "$param_href->{blastout_tbl}_uniq_species";
+
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $blout_species_tbl, ch => $ch, %{$param_href} } );
+
+    my $blout_species_q = qq{
+	CREATE TABLE $param_href->{database}.$blout_species_tbl
+	ENGINE=MergeTree (date, (ps, prot_id, ti), 8192)
+	AS SELECT ps, prot_id, ti_bl AS ti, species_name, date_bl AS date
+	FROM (SELECT ps, prot_id, ti AS ti_bl, date as date_bl FROM $param_href->{database}.$blout_analyze_tbl)
+	ALL INNER JOIN
+	(SELECT ti, species_name FROM $param_href->{database}.$param_href->{names_tbl})
+	USING ti
+	};
+    $log->trace("$blout_species_q");
+
+    eval { $ch->do($blout_species_q) };
+    $log->error("Error: creating {$param_href->{database}.$blout_species_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$blout_species_tbl} created successfully") unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$blout_species_tbl", %$param_href } );
+
+    # PART 4: CALCULATE count() as gene_hits_per_species
+    my $report_gene_hits_per_species_tbl = "$param_href->{blastout_tbl}_report_per_species";
+
+    # drop table if it exists
+    _drop_table_only_ch( { table_name => $report_gene_hits_per_species_tbl, ch => $ch, %{$param_href} } );
+
+    # POSSIBLE BUG with this date column (if calculation happens around midnight) because of GROUP BY splitting on date
+    my $report_gene_hits_per_species_q = qq{
+	CREATE TABLE $param_href->{database}.$report_gene_hits_per_species_tbl
+	ENGINE=MergeTree (date, (ps, ti), 8192)
+	AS SELECT ps, ti, species_name, count() AS gene_hits_per_species, today() AS date
+	FROM $param_href->{database}.$blout_species_tbl
+	GROUP BY ps, ti, species_name, date
+	ORDER BY ps, gene_hits_per_species DESC
+	};
+    $log->trace("$report_gene_hits_per_species_q");
+
+    eval { $ch->do($report_gene_hits_per_species_q) };
+    $log->error("Error: creating {$param_href->{database}.$report_gene_hits_per_species_tbl} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$report_gene_hits_per_species_tbl} created successfully") unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$report_gene_hits_per_species_tbl", %$param_href } );
+
+    # PART 5: create genelist and insert it into table
+    # create table that will hold updated info (with genelists)
+    _drop_table_only_ch( { table_name => "${report_gene_hits_per_species_tbl}2", ch => $ch, %{$param_href} } );
+    my $report_gene_hits_per_species_q2 = qq{
+	CREATE TABLE $param_href->{database}.${report_gene_hits_per_species_tbl}2 (
+    ps UInt8,
+    ti UInt32,
+    species_name String,
+    gene_hits_per_species UInt64,
+    genelist String,
+    date Date  DEFAULT today() )
+	ENGINE=MergeTree (date, (ps, ti), 8192)
+	};
+    $log->trace("$report_gene_hits_per_species_q2");
+
+    eval { $ch->do($report_gene_hits_per_species_q2) };
+    $log->error("Error: creating {$param_href->{database}.${report_gene_hits_per_species_tbl}2} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.${report_gene_hits_per_species_tbl}2} created successfully") unless $@;
+
+    #	# open filehandle to scalar to write to it and import from it to database
+    #	my $scalar;
+    #	open (my $dbin_fh, ">", \$scalar) or $log->logdie("Error: can't open scalar variable for writing");
+
+    #retrieve entire table to modify it and return back
+    my $select_q
+      = qq{SELECT ps, ti, species_name, gene_hits_per_species FROM $param_href->{database}.$report_gene_hits_per_species_tbl};
+    my ( $success_sel, $res_sel ) = _http_exec_query( { query => $select_q, %$param_href } );
+
+    # open a filehandle to string to read line by line
+    open( my $sel_fh, "<", \$res_sel ) or $log->logdie("Error: can't open filehandle to a scalar filehandle");
+    my @arg_list;
+    while (<$sel_fh>) {
+        chomp;
+        my ( $ps, $ti, $species_name, $gene_hits ) = split "\t", $_;
+
+        # get list of prot_ids associated with specific ti
+        my $prot_ids = $ch->select("SELECT prot_id FROM $param_href->{database}.$blout_species_tbl WHERE ti = $ti");
+        my @genes;
+        foreach my $prot_id (@$prot_ids) {
+            push @genes, @$prot_id;
+        }
+        my $genelist = join ', ', @genes;
+
+        # print to scalar filehandle
+        #		print {$dbin_fh} "$ps\t$ti\t$species_name\t$gene_hits\t$genelist\n";
+        push @arg_list, [ $ps, $ti, $species_name, $gene_hits, $genelist ];
+
+    }
+    close $sel_fh;
+
+    # build query to import back to database
+    my $import_query
+      = qq{INSERT INTO $param_href->{database}.${report_gene_hits_per_species_tbl}2 (ps, ti, species_name, gene_hits_per_species, genelist) VALUES};
+    $log->trace("$import_query");
+    eval { $ch->do( $import_query, @arg_list ) };
+    $log->error("Error: inserting into {$param_href->{database}.${report_gene_hits_per_species_tbl}2} failed: $@")
+      if $@;
+    $log->info("Action: {$param_href->{database}.${report_gene_hits_per_species_tbl}2} inserted successfully")
+      unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "${report_gene_hits_per_species_tbl}2", %$param_href } );
+
+    # PART 6: DROP EXTRA TABLES AND RENAME REPORT TABLE
+    #_drop_table_only_ch( { table_name => $blastout_uniq_tbl, ch => $ch, %{$param_href} } );
+    _drop_table_only_ch( { table_name => $blout_ps_tbl,      ch => $ch, %{$param_href} } );
+    _drop_table_only_ch( { table_name => $blout_analyze_tbl, ch => $ch, %{$param_href} } );
+    _drop_table_only_ch( { table_name => $report_gene_hits_per_species_tbl, ch => $ch, %{$param_href} } );
+
+    # rename report2 table to report table
+    my $rename_report_tbl_q
+      = qq{RENAME TABLE $param_href->{database}.${report_gene_hits_per_species_tbl}2 TO $param_href->{database}.$report_gene_hits_per_species_tbl};
+    eval { $ch->do($rename_report_tbl_q) };
+    $log->error("Error: renaming {$param_href->{database}.${report_gene_hits_per_species_tbl}2} failed: $@") if $@;
+    $log->info(
+        "Action: {$param_href->{database}.${report_gene_hits_per_species_tbl}2} renamed to {$param_href->{database}.${report_gene_hits_per_species_tbl}} successfully"
+    ) unless $@;
+
+    return;
+}
+
 
 
 ### INTERFACE SUB ###
@@ -1671,17 +1888,8 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
     FindOrigin.pm --mode=blastout_uniq -d hs_plus -v
 
-    # runs summary per phylostrata per species of BLAST output analysis.
-    FindOrigin.pm --mode=report_per_ps -o -d hs_plus -v
-
-    # removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
-    FindOrigin.pm --mode=exclude_ti_from_blastout -if t/data/hs_all_plus_21_12_2015 -ti 428574 -v
-
     # update report_per_ps table with unique and intersect hts and gene lists
     FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v
-
-    # import full blastout with all columns (plus ti and pgi)
-    FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v
 
     # import full BLAST database (plus ti and pgi columns)
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
@@ -1763,27 +1971,7 @@ Imports names file (columns ti, species_name) into ClickHouse.
  perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
 It creates a unique non-redundant blastout_uniq table with only relevant information (prot_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
-From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl which holds summary of per phylostrata per species of BLAST output analysis.
-
-=item report_per_ps
-
- # options from command line
- lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
-
- # options from config
- lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v
-
-Runs summary per phylostrata per species of BLAST output analysis.
-
-=item exclude_ti_from_blastout
-
- # options from command line
- lib/FindOrigin.pm --mode=exclude_ti_from_blastout -if t/data/hs_all_plus_21_12_2015 -ti 428574 -v
-
- # options from config
- lib/FindOrigin.pm --mode=exclude_ti_from_blastout -if t/data/hs_all_plus_21_12_2015 -ti 428574 -v
-
-Removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
+From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl2 which holds summary of per phylostrata per species of BLAST output analysis (ps, ti, species_name, gene_hits_per_species, genelist).
 
 =item report_per_ps_unique
 

@@ -22,17 +22,8 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
     FindOrigin.pm --mode=blastout_uniq -d hs_plus -v
 
-    # runs summary per phylostrata per species of BLAST output analysis.
-    FindOrigin.pm --mode=report_per_ps -o -d hs_plus -v
-
-    # removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
-    FindOrigin.pm --mode=exclude_ti_from_blastout -if t/data/hs_all_plus_21_12_2015 -ti 428574 -v
-
     # update report_per_ps table with unique and intersect hts and gene lists
     FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v
-
-    # import full blastout with all columns (plus ti and pgi)
-    FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v
 
     # import full BLAST database (plus ti and pgi columns)
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
@@ -111,27 +102,7 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
         perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
     It creates a unique non-redundant blastout\_uniq table with only relevant information (prot\_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
-    From that blastout\_uniq\_tbl it creates report\_gene\_hit\_per\_species\_tbl which holds summary of per phylostrata per species of BLAST output analysis.
-
-- report\_per\_ps
-
-        # options from command line
-        lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
-
-        # options from config
-        lib/FindOrigin.pm --mode=report_per_ps -d hs_plus -v
-
-    Runs summary per phylostrata per species of BLAST output analysis.
-
-- exclude\_ti\_from\_blastout
-
-        # options from command line
-        lib/FindOrigin.pm --mode=exclude_ti_from_blastout -if t/data/hs_all_plus_21_12_2015 -ti 428574 -v
-
-        # options from config
-        lib/FindOrigin.pm --mode=exclude_ti_from_blastout -if t/data/hs_all_plus_21_12_2015 -ti 428574 -v
-
-    Removes specific hits from the BLAST output based on the specified tax\_id (exclude bad genomes).
+    From that blastout\_uniq\_tbl it creates report\_gene\_hit\_per\_species\_tbl2 which holds summary of per phylostrata per species of BLAST output analysis (ps, ti, species\_name, gene\_hits\_per\_species, genelist).
 
 - report\_per\_ps\_unique
 
