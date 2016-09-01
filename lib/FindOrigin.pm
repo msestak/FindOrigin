@@ -35,6 +35,7 @@ our @EXPORT_OK = qw{
   import_blastdb_stats
   import_names
   blastout_uniq
+  bl_uniq_expanded
 
 };
 
@@ -56,9 +57,9 @@ sub run {
     my ($param_href) = get_parameters_from_cmd();
 
     #preparation of parameters
-    my $verbose  = $param_href->{verbose};
-    my $quiet    = $param_href->{quiet};
-    my @mode     = @{ $param_href->{mode} };
+    my $verbose = $param_href->{verbose};
+    my $quiet   = $param_href->{quiet};
+    my @mode    = @{ $param_href->{mode} };
 
     #start logging for the rest of program (without capturing of parameters)
     init_logging( $verbose, $param_href->{argv} );
@@ -68,38 +69,37 @@ sub run {
     my $log = Log::Log4perl::get_logger("main");
 
     # Logs both to Screen and File appender
-	#$log->info("This is start of logging for $0");
-	#$log->trace("This is example of trace logging for $0");
+    #$log->info("This is start of logging for $0");
+    #$log->trace("This is example of trace logging for $0");
 
     #get dump of param_href if -v (verbose) flag is on (for debugging)
     my $param_print = sprintf( Dumper($param_href) ) if $verbose;
-    $log->debug( '$param_href = '."$param_print" ) if $verbose;
+    $log->debug( '$param_href = ' . "$param_print" ) if $verbose;
 
     #call write modes (different subs that print different jobs)
     my %dispatch = (
-        create_db            => \&create_db,              # drop and recreate database in ClickHouse
-        import_blastout      => \&import_blastout,        # import BLAST output
-        import_map           => \&import_map,             # import Phylostratigraphic map with header
-		import_blastdb_stats => \&import_blastdb_stats,   # import BLAST database stats file
-		import_names         => \&import_names,           # import names file
-		blastout_uniq        => \&blastout_uniq,          # analyzes BLAST output file using map, names and blastout tables
-		report_per_ps        => \&report_per_ps,          # make a report of previous analysis (BLAST hits per phylostratum)
-		report_per_ps_unique => \&report_per_ps_unique,   # add unique BLAST hits per species
-        import_blastdb       => \&import_blastdb,         # import BLAST database with all columns
+        create_db            => \&create_db,               # drop and recreate database in ClickHouse
+        import_blastout      => \&import_blastout,         # import BLAST output
+        import_map           => \&import_map,              # import Phylostratigraphic map with header
+        import_blastdb_stats => \&import_blastdb_stats,    # import BLAST database stats file
+        import_names         => \&import_names,            # import names file
+        blastout_uniq        => \&blastout_uniq,           # analyzes BLAST output file using map, names and blastout tables
+        bl_uniq_expanded     => \&bl_uniq_expanded,        # add unique BLAST hits per species
+        import_blastdb       => \&import_blastdb,          # import BLAST database with all columns
 
     );
 
     foreach my $mode (@mode) {
         if ( exists $dispatch{$mode} ) {
-            $log->info("RUNNING ACTION for mode: ", $mode);
+            $log->info( "RUNNING ACTION for mode: ", $mode );
 
-            $dispatch{$mode}->( $param_href );
+            $dispatch{$mode}->($param_href);
 
             $log->info("TIME when finished for: $mode");
         }
         else {
             #complain if mode misspelled or just plain wrong
-            $log->logcroak( "Unrecognized mode --mode={$mode} on command line thus aborting");
+            $log->logcroak("Unrecognized mode --mode={$mode} on command line thus aborting");
         }
     }
 
@@ -181,13 +181,14 @@ sub get_parameters_from_cmd {
 
         'tax_id|ti=i' => \$cli{tax_id},
 
-        'blastout_tbl=s'  => \$cli{blastout_tbl},
-        'blastdb_tbl=s'   => \$cli{blastdb_tbl},
-        'names_tbl=s'     => \$cli{names_tbl},
-        'map_tbl=s'       => \$cli{map_tbl},
-        'stats_ps_tbl=s'  => \$cli{stats_ps_tbl},
-        'stats_gen_tbl=s' => \$cli{stats_gen_tbl},
-        'report_per_ps=s' => \$cli{report_per_ps},
+        'blastout_tbl=s'   => \$cli{blastout_tbl},
+        'blastdb_tbl=s'    => \$cli{blastdb_tbl},
+        'names_tbl=s'      => \$cli{names_tbl},
+        'map_tbl=s'        => \$cli{map_tbl},
+        'stats_ps_tbl=s'   => \$cli{stats_ps_tbl},
+        'stats_gen_tbl=s'  => \$cli{stats_gen_tbl},
+        'report_ps_tbl=s'  => \$cli{report_ps_tbl},
+        'report_exp_tbl=s' => \$cli{report_exp_tbl},
 
         'host|ho=s'    => \$cli{host},
         'database|d=s' => \$cli{database},
@@ -1351,151 +1352,186 @@ sub blastout_uniq {
 }
 
 
-
 ### INTERFACE SUB ###
-# Usage      : --mode=report_per_ps_unique
-# Purpose    : reports blast output analysis per species (ti) per phylostrata and unique hits
+# Usage      : --mode=bl_uniq_expanded
+# Purpose    : expands genehits into types (how many hits per phylostratum) to find repeating and unique hits
 # Returns    : nothing
 # Parameters : 
 # Throws     : croaks if wrong number of parameters
-# Comments   : 
+# Comments   : works with report table that --mode=blastout_uniq created
 # See Also   : 
-sub report_per_ps_unique {
+sub bl_uniq_expanded {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak('report_per_ps_unique() needs a $p_href') unless @_ == 1;
-    my ($p_href) = @_;
+    $log->logcroak('bl_uniq_expanded() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
 
-    my $out = $p_href->{out} or $log->logcroak('no $out specified on command line!');
-    my $dbh = _http_exec_query($p_href);
+    # get new handle
+    my $ch = _get_ch($param_href);
 
-	# name the report_per_ps table
-	my $report_per_ps_tbl = "$p_href->{report_per_ps}";
+    # create table that will hold updated info (with genelists)
+    my $report_ps_tbl_exp = "$param_href->{report_ps_tbl}" . '_expanded';
+    _drop_table_only_ch( { table_name => $report_ps_tbl_exp, ch => $ch, %{$param_href} } );
+    my $report_ps_tbl_exp_q = qq{
+    CREATE TABLE $param_href->{database}.$report_ps_tbl_exp (
+    ps UInt8,
+    ti UInt32,
+    species_name String,
+    gene_hits_per_species UInt64,
+    genelist String,
+    hits1 UInt32,
+    hits2 UInt32,
+    hits3 UInt32,
+    hits4 UInt32,
+    hits5 UInt32,
+    hits6 UInt32,
+    hits7 UInt32,
+    hits8 UInt32,
+    hits9 UInt32,
+    hits10 UInt32,
+    list1 String,
+    list2 String,
+    list3 String,
+    list4 String,
+    list5 String,
+    list6 String,
+    list7 String,
+    list8 String,
+    list9 String,
+    list10 String,
+    date Date  DEFAULT today()
+    )ENGINE=MergeTree (date, (ps, ti), 8192)
+    };
+    $log->trace("$report_ps_tbl_exp_q");
 
-	# create summary per phylostrata per species
-    my $report_per_ps_alter = sprintf( qq{
-    ALTER TABLE %s ADD COLUMN hits1 INT, ADD COLUMN hits2 INT, ADD COLUMN hits3 INT, ADD COLUMN hits4 INT, ADD COLUMN hits5 INT, 
-	ADD COLUMN hits6 INT, ADD COLUMN hits7 INT, ADD COLUMN hits8 INT, ADD COLUMN hits9 INT, ADD COLUMN hits10 INT, 
-	ADD COLUMN list1 MEDIUMTEXT, ADD COLUMN list2 MEDIUMTEXT, ADD COLUMN list3 MEDIUMTEXT, ADD COLUMN list4 MEDIUMTEXT, ADD COLUMN list5 MEDIUMTEXT,
-	ADD COLUMN list6 MEDIUMTEXT, ADD COLUMN list7 MEDIUMTEXT, ADD COLUMN list8 MEDIUMTEXT, ADD COLUMN list9 MEDIUMTEXT, ADD COLUMN list10 MEDIUMTEXT
-	}, $dbh->quote_identifier($report_per_ps_tbl) );
-	$log->trace("Report: $report_per_ps_alter");
-	eval { $dbh->do($report_per_ps_alter) };
-    $log->error( "Error: table $report_per_ps_tbl failed to alter: $@" ) if $@;
-    $log->debug( "Report: table $report_per_ps_tbl alter succeeded" ) unless $@;
+    eval { $ch->do($report_ps_tbl_exp_q) };
+    $log->error("Error: creating {$param_href->{database}.$report_ps_tbl_exp} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$report_ps_tbl_exp} created successfully") unless $@;
 
-	#for large GROUP_CONCAT selects
-	my $value = 16_777_215;
-	my $variables_query = qq{
-	SET SESSION group_concat_max_len = $value
-	};
-	eval { $dbh->do($variables_query) };
-    $log->error( "Error: changing SESSION group_concat_max_len=$value failed: $@" ) if $@;
-    $log->debug( "Report: changing SESSION group_concat_max_len=$value succeeded" ) unless $@;
+    # build query to import back to database (needed later)
+    my $import_query
+      = qq{INSERT INTO $param_href->{database}.$report_ps_tbl_exp (ti, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10, list1, list2, list3, list4, list5, list6, list7, list8, list9, list10 ) VALUES};
+    $log->trace("$import_query");
 
-    # get columns from REPORT_PER_PS table to iterate on phylostrata
-	my $select_ps = sprintf( qq{
-	SELECT DISTINCT ps FROM %s ORDER BY ps
-	}, $dbh->quote_identifier($report_per_ps_tbl) );
-	
-	# get column phylostrata to array to iterate insert query on them
-	my @ps = map { $_->[0] } @{ $dbh->selectall_arrayref($select_ps) };
-	$log->trace( 'Returned phylostrata: {', join('}{', @ps), '}' );
+    # get phylostrata from REPORT_PER_PS table to iterate on phylostrata
+    my $select_ps_q = qq{ SELECT DISTINCT ps FROM $param_href->{database}.$param_href->{report_ps_tbl} ORDER BY ps};
+    my $ps_aref     = $ch->select($select_ps_q);
+    my @ps          = map { $_->[0] } @{$ps_aref};
+    $log->trace( 'Returned phylostrata: {', join( '}{', @ps ), '}' );
 
-	# prepare insert query
-	my $ins_hits = sprintf( qq{
-	UPDATE %s
-	SET hits1 = ?, hits2 = ?, hits3 = ?, hits4 = ?, hits5 = ?, hits6 = ?, hits7 = ?, hits8 = ?, hits9 = ?, hits10 = ?, 
-	list1 = ?, list2 = ?, list3 = ?, list4 = ?, list5 = ?, list6 = ?, list7 = ?, list8 = ?, list9 = ?, list10 = ?
-	WHERE ti = ?
-	}, $dbh->quote_identifier($report_per_ps_tbl) );
-	my $sth = $dbh->prepare($ins_hits);
+    # insert hits and genelists into database
+    foreach my $ps (@ps) {
 
-	# insert hits and genelists into database
-	foreach my $ps (@ps) {
+        #get gene_list from db
+        my $select_gene_list_from_report_q = qq{
+        SELECT DISTINCT ti, genelist
+        FROM $param_href->{database}.$param_href->{report_ps_tbl}
+        WHERE ps = $ps
+        ORDER BY gene_hits_per_species
+        };
+        my $ti_genelist_aref = $ch->select($select_gene_list_from_report_q);
+        my %ti_genelist_h = map { $_->[0], $_->[1] } @{$ti_genelist_aref};
 
-		#get gene_list from db
-		my $select_gene_list_from_report = sprintf( qq{
-	    SELECT DISTINCT ti, gene_list
-		FROM %s
-		WHERE ps = $ps
-		ORDER BY gene_hits_per_species
-	    }, $dbh->quote_identifier($report_per_ps_tbl) );
-	    my %ti_genelist_h = map { $_->[0], $_->[1]} @{$dbh->selectall_arrayref($select_gene_list_from_report)};
+        # get ti list sorted by gene_hits_per_species
+        my @ti = map { $_->[0] } @{$ti_genelist_aref};
 
-		# get ti list sorted by gene_hits_per_species
-		my @ti = map { $_->[0] } @{ $dbh->selectall_arrayref($select_gene_list_from_report) };
+        # transform gene_list to array and push all arrays into single array
+        my @full_genelist;
+        foreach my $ti (@ti) {
+            my @gene_list_a = split ",", $ti_genelist_h{$ti};
+            $ti_genelist_h{$ti} = \@gene_list_a;
+            push @full_genelist, @gene_list_a;
+        }
 
-		# transform gene_list to array and push all arrays into single array
-		my @full_genelist;
-		foreach my $ti (@ti) {
-			my @gene_list_a = split ",", $ti_genelist_h{$ti};
-			$ti_genelist_h{$ti} = \@gene_list_a;
-			push @full_genelist, @gene_list_a;
-		}
+        # get count of each prot_id
+        my %gene_count;
+        foreach my $prot_id (@full_genelist) {
+            $gene_count{$prot_id}++;
+        }
 
-		# get count of each prot_id
-		my %gene_count;
-		foreach my $prot_id (@full_genelist) {
-			$gene_count{$prot_id}++;
-		}
+        # get unique count per tax_id
+        my @arg_list;
+        foreach my $ti (@ti) {
+            my @ti_genelist = @{ $ti_genelist_h{$ti} };
+            my ( $ti_unique,     $ti2,  $ti3,  $ti4,  $ti5,  $ti6,  $ti7,  $ti8,  $ti9,  $ti10 )  = (0) x 11;
+            my ( $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g ) = ('') x 11;
 
-		# get unique count per tax_id
-		foreach my $ti (@ti) {
-			my @ti_genelist = @{ $ti_genelist_h{$ti} };
-			my ($ti_unique, $ti2, $ti3, $ti4, $ti5, $ti6, $ti7, $ti8, $ti9, $ti10) = (0) x 11;
-			my ($ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g) = ('') x 11;
+            # do the calculation here (tabulated ternary) 10 and 10+hits go to hits10
+            foreach my $prot_id (@ti_genelist) {
+                    $gene_count{$prot_id} == 1 ? do { $ti_unique++; $ti_uniq_genes .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 2 ? do { $ti2++;       $ti2g          .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 3 ? do { $ti3++;       $ti3g          .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 4 ? do { $ti4++;       $ti4g          .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 5 ? do { $ti5++;       $ti5g          .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 6 ? do { $ti6++;       $ti6g          .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 7 ? do { $ti7++;       $ti7g          .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 8 ? do { $ti8++;       $ti8g          .= ',' . $prot_id; }
+                  : $gene_count{$prot_id} == 9 ? do { $ti9++;       $ti9g          .= ',' . $prot_id; }
+                  :                              do { $ti10++;      $ti10g         .= ',' . $prot_id; };
+            }
 
-			# do the calculation here (tabulated ternary) 10 and 10+hits go to hits10
-			foreach my $prot_id (@ti_genelist) {
-				$gene_count{$prot_id} == 1 ? do {$ti_unique++; $ti_uniq_genes .= ',' . $prot_id;} : 
-				$gene_count{$prot_id} == 2 ? do {$ti2++; $ti2g .= ',' . $prot_id;}                : 
-				$gene_count{$prot_id} == 3 ? do {$ti3++; $ti3g .= ',' . $prot_id;}                : 
-				$gene_count{$prot_id} == 4 ? do {$ti4++; $ti4g .= ',' . $prot_id;}                : 
-				$gene_count{$prot_id} == 5 ? do {$ti5++; $ti5g .= ',' . $prot_id;}                : 
-				$gene_count{$prot_id} == 6 ? do {$ti6++; $ti6g .= ',' . $prot_id;}                : 
-				$gene_count{$prot_id} == 7 ? do {$ti7++; $ti7g .= ',' . $prot_id;}                : 
-				$gene_count{$prot_id} == 8 ? do {$ti8++; $ti8g .= ',' . $prot_id;}                : 
-				$gene_count{$prot_id} == 9 ? do {$ti9++; $ti9g .= ',' . $prot_id;}                : 
-				                                                                                    do {$ti10++; $ti10g .= ',' . $prot_id;};
-			}
+            # remove comma at start
+            foreach my $genelist ( $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g ) {
+                $genelist =~ s/\A,(.+)\z/$1/;
+            }
 
-			# remove comma at start
-			foreach my $genelist ($ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g) {
-				$genelist =~ s/\A,(.+)\z/$1/;
-			}
+            # insert into db
+            push @arg_list,
+              [ $ti, $ti_unique, $ti2, $ti3, $ti4, $ti5, $ti6, $ti7, $ti8, $ti9, $ti10,
+                $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g
+              ];
+            #say "TI:$ti\tuniq:$ti_unique\tti2:$ti2\tti3:$ti3\tti4:$ti4\tti5:$ti5\tti6:$ti6\tti7:$ti7\tti8:$ti8\tti9:$ti9\tti10:$ti10";
+            #say  "TI:$ti\tuniq:$ti_uniq_genes\tti2:$ti2g\tti3:$ti3g\tti4:$ti4g\tti5:$ti5g\tti6:$ti6g\tti7:$ti7g\tti8:$ti8g\tti9:$ti9g\tti10:$ti10g";
+        }
 
-			# insert into db
-			$sth->execute($ti_unique, $ti2, $ti3, $ti4, $ti5, $ti6, $ti7, $ti8, $ti9, $ti10, $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g, $ti);
-			#say "TI:$ti\tuniq:$ti_unique\tti2:$ti2\tti3:$ti3\tti4:$ti4\tti5:$ti5";
-			#say "TI:$ti\tuniq:$ti_uniq_genes\tti2:$ti2g\tti3:$ti3g\tti4:$ti4g\tti5:$ti5g";
-		}
+        # import calculated values into table
+        eval { $ch->do( $import_query, @arg_list ) };
+        $log->error("Error: inserting into {$param_href->{database}.$report_ps_tbl_exp} failed: $@")
+          if $@;
+        $log->info("Action: {$param_href->{database}.$report_ps_tbl_exp} inserted successfully")
+          unless $@;
 
-		$log->debug("Report: inserted ps $ps");
-	}   # end foreach ps
-	
-	#export to tsv file
-	my $out_report_per_ps = path($out, $report_per_ps_tbl);
-	if (-f $out_report_per_ps ) {
-		unlink $out_report_per_ps and $log->warn( "Warn: file $out_report_per_ps found and unlinked" );
-	}
-	else {
-		$log->trace( "Action: file $out_report_per_ps will be created by SELECT INTO OUTFILE" );
-	}
-	my $export_report_per_ps = qq{
-		SELECT * FROM $report_per_ps_tbl
-		INTO OUTFILE '$out_report_per_ps' } 
-		. q{
-		FIELDS TERMINATED BY '\t'
-		LINES TERMINATED BY '\n';
-	};
+        $log->debug("Report: inserted ps $ps");
+    }    # end foreach ps
 
-	my $r_ex;
-    eval { $r_ex = $dbh->do($export_report_per_ps) };
-    $log->error( "Error: exporting $report_per_ps_tbl to $out_report_per_ps failed: $@" ) if $@;
-    $log->debug( "Action: table $report_per_ps_tbl exported $r_ex rows to $out_report_per_ps" ) unless $@;
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$report_ps_tbl_exp", %$param_href } );
 
-	$sth->finish;
-    $dbh->disconnect;
+    # PART 2: JOIN report and report_expanded table
+    # create final table that will hold updated info (with unique hits and lists)
+    my $report_ps_tbl_exp2 = "$param_href->{report_ps_tbl}" . '_expanded2';
+    _drop_table_only_ch( { table_name => $report_ps_tbl_exp2, ch => $ch, %{$param_href} } );
+
+    # join expanded table and original report table to get all columns together
+    my $report_ps_tbl_exp_q2 = qq{
+    CREATE TABLE $param_href->{database}.$report_ps_tbl_exp2
+    ENGINE=MergeTree (date, (ps, ti), 8192)
+    AS SELECT ps, ti_exp AS ti, species_name, gene_hits_per_species, genelist, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10, list1, list2, list3, list4, list5, list6, list7, list8, list9, list10, date_bl AS date
+    FROM (SELECT ti AS ti_exp, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10, list1, list2, list3, list4, list5, list6, list7, list8, list9, list10, date AS date_bl
+    FROM $param_href->{database}.$report_ps_tbl_exp)
+    ALL INNER JOIN
+    (SELECT ps, ti, species_name, gene_hits_per_species, genelist FROM $param_href->{database}.$param_href->{report_ps_tbl})
+    USING ti
+    };
+    $log->trace("$report_ps_tbl_exp_q2");
+
+    eval { $ch->do($report_ps_tbl_exp_q2) };
+    $log->error("Error: creating {$param_href->{database}.$report_ps_tbl_exp2} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$report_ps_tbl_exp2} created successfully") unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$report_ps_tbl_exp2", %$param_href } );
+
+    # PART 3: DROP EXTRA TABLES AND RENAME REPORT TABLE
+    _drop_table_only_ch( { table_name => $report_ps_tbl_exp, ch => $ch, %{$param_href} } );
+
+    # rename report2 table to report table
+    my $rename_report_tbl_q
+      = qq{RENAME TABLE $param_href->{database}.$report_ps_tbl_exp2 TO $param_href->{database}.$report_ps_tbl_exp};
+    eval { $ch->do($rename_report_tbl_q) };
+    $log->error("Error: renaming {$param_href->{database}.$report_ps_tbl_exp2} failed: $@") if $@;
+    $log->info(
+        "Action: {$param_href->{database}.$report_ps_tbl_exp2} renamed to {$param_href->{database}.$report_ps_tbl_exp} successfully"
+    ) unless $@;
 
     return;
 }
@@ -1888,8 +1924,8 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
     FindOrigin.pm --mode=blastout_uniq -d hs_plus -v
 
-    # update report_per_ps table with unique and intersect hts and gene lists
-    FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v
+    # update report_ps_tbl table with unique and intersect hts and gene lists
+    FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
     # import full BLAST database (plus ti and pgi columns)
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
@@ -1973,40 +2009,15 @@ Imports names file (columns ti, species_name) into ClickHouse.
 It creates a unique non-redundant blastout_uniq table with only relevant information (prot_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
 From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl2 which holds summary of per phylostrata per species of BLAST output analysis (ps, ti, species_name, gene_hits_per_species, genelist).
 
-=item report_per_ps_unique
+=item bl_uniq_expanded
 
  # options from command line
- FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
+ FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
  # options from config
- FindOrigin.pm --mode=report_per_ps_unique -d hs_plus -v
+ FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
-Update report_per_ps table with unique and intersect hits and gene lists.
-
-=item import_blastout_full
-
- # options from command line
- FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v -p msandbox -u msandbox -po 8123
-
- # options from config
- FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v
-
-Extracts hit column and splits it on ti and pgi and imports this file into ClickHouse (it has 2 extra columns = ti and pgi with no duplicates). It needs ClickHouse connection parameters to connect to ClickHouse.
-
- [2016/04/20 16:12:42,230] INFO> FindOrigin::run line:101==>RUNNING ACTION for mode: import_blastout_full
- [2016/04/20 16:12:42,232]DEBUG> FindOrigin::_extract_blastout_full line:1644==>Report: started processing of /home/msestak/prepare_blast/out/random/hs_all_plus_21_12_2015_good
- [2016/04/20 16:12:51,790]TRACE> FindOrigin::_extract_blastout_full line:1664==>1000000 lines processed!
- ...  Perl processing (3.5 h)
- [2016/04/20 19:37:59,376]TRACE> FindOrigin::_extract_blastout_full line:1664==>1151000000 lines processed!
- [2016/04/20 19:38:07,991] INFO> FindOrigin::_extract_blastout_full line:1670==>Report: file /home/msestak/prepare_blast/out/random/hs_all_plus_21_12_2015_good_formated printed successfully with 503625726 lines (from 1151804042 original lines)
- [2016/04/20 19:38:08,034]TRACE> FindOrigin::import_blastout_full line:1575==>Time running:0 sec    STATE:Fetched about 2000 rows, loading data still remains
- ... Load (50 min)
- [2016/04/20 20:28:58,788] INFO> FindOrigin::import_blastout_full line:1581==>Action: import inserted 503625726 rows!
- [2016/04/20 20:28:58,807]TRACE> FindOrigin::import_blastout_full line:1603==>Time running:0 sec    STATE:Adding indexes
- ... indexing (33 min)
- [2016/04/20 21:01:59,155] INFO> FindOrigin::import_blastout_full line:1610==>Action: Indices protx and tix on hs_all_plus_21_12_2015_good added successfully!
- [2016/04/20 21:01:59,156] INFO> FindOrigin::run line:105==>TIME when finished for: import_blastout_full
-
+Update report_ps_tbl table with unique and intersect hits and gene lists.
 
 =item import_blastdb
 
@@ -2034,19 +2045,157 @@ All configuration in set in blastoutanalyze.cnf that is found in ./lib directory
 Example:
 
  [General]
- #in       = /home/msestak/prepare_blast/out/dr_plus/
- #out      = /msestak/gitdir/ClickHouseinstall
- #infile   = /home/msestak/mysql-5.6.27-linux-glibc2.5-x86_64.tar.gz
- #outfile  = /home/msestak/prepare_blast/out/dr_04_02_2016.xlsx
+ #in       = t/data/
+ out      =  t/data/
+ #infile   = t/data/
+ #outfile  = t/data/
  
  [Database]
- host     = localhost
- database = test_db_here
- user     = msandbox
- password = msandbox
- port     = 8123
- socket   = /tmp/mysql_sandbox8123.sock
- charset  = ascii
+ host      = localhost
+ database  = test
+ #user     = default
+ #password = ''
+ port      = 8123
+ 
+ [Tables]
+ blastout_tbl   = hs_1mil
+ names_tbl      = names_dmp_fmt_new
+ map_tbl        = hs3_map
+ stats_ps_tbl   = analyze_hs_9606_all_ff_for_db_stats_ps
+ stats_gen_tbl  = analyze_hs_9606_all_ff_for_db_stats_genomes
+ blastdb_tbl    = ''
+ report_ps_tbl  = hs_1mil_report_per_species
+ report_exp_tbl = hs_1mil_report_per_species_expanded
+ 
+ [Files]
+ blastdb  = t/data/dbfull.gz
+ blastout = t/data/hs_all_plus_21_12_2015.gz
+ map      = t/data/hs3.phmap_names
+ names    = t/data/names.dmp.fmt.new.gz
+ stats    = t/data/analyze_hs_9606_all_ff_for_db
+ 
+ [PS]
+ 1   =  1
+ 2   =  2
+ 3   =  2
+ 4   =  2
+ 5   =  3
+ 6   =  4
+ 7   =  4
+ 8   =  4
+ 9   =  5
+ 10  =  6
+ 11  =  6
+ 12  =  7
+ 13  =  8
+ 14  =  9
+ 15  =  10
+ 16  =  11
+ 17  =  11
+ 18  =  11
+ 19  =  12
+ 20  =  12
+ 21  =  12
+ 22  =  13
+ 23  =  14
+ 24  =  15
+ 25  =  15
+ 26  =  16
+ 27  =  17
+ 28  =  18
+ 29  =  18
+ 30  =  19
+ 31  =  19
+ 32  =  19
+ 33  =  19
+ 34  =  19
+ 35  =  19
+ 36  =  19
+ 37  =  19
+ 38  =  19
+ 39  =  19
+ 
+ [TI]
+ 131567   =  131567
+ 2759     =  2759
+ 1708629  =  2759
+ 1708631  =  2759
+ 33154    =  33154
+ 1708671  =  1708671
+ 1708672  =  1708671
+ 1708673  =  1708671
+ 33208    =  33208
+ 6072     =  6072
+ 1708696  =  6072
+ 33213    =  33213
+ 33511    =  33511
+ 7711     =  7711
+ 1708690  =  1708690
+ 7742     =  7742
+ 7776     =  7742
+ 117570   =  7742
+ 117571   =  117571
+ 8287     =  117571
+ 1338369  =  117571
+ 32523    =  32523
+ 32524    =  32524
+ 40674    =  40674
+ 32525    =  40674
+ 9347     =  9347
+ 1437010  =  1437010
+ 314146   =  314146
+ 1708730  =  314146
+ 9443     =  9443
+ 376913   =  9443
+ 314293   =  9443
+ 9526     =  9443
+ 314295   =  9443
+ 9604     =  9443
+ 207598   =  9443
+ 1708693  =  9443
+ 9605     =  9443
+ 9606     =  9443
+ 
+ [PSNAME]
+ cellular_organisms  =  cellular_organisms
+ Eukaryota  =  Eukaryota
+ Unikonta  =  Eukaryota
+ Apusozoa/Opisthokonta  =  Eukaryota
+ Opisthokonta  =  Opisthokonta
+ Holozoa  =  Holozoa
+ Filozoa  =  Holozoa
+ Metazoa/Choanoflagellida  =  Holozoa
+ Metazoa  =  Metazoa
+ Eumetazoa  =  Eumetazoa
+ Cnidaria/Bilateria  =  Eumetazoa
+ Bilateria  =  Bilateria
+ Deuterostomia  =  Deuterostomia
+ Chordata  =  Chordata
+ Olfactores  =  Olfactores
+ Vertebrata  =  Vertebrata
+ Gnathostomata  =  Vertebrata
+ Teleostomi  =  Vertebrata
+ Euteleostomi  =  Euteleostomi
+ Sarcopterygii  =  Euteleostomi
+ Dipnotetrapodomorpha  =  Euteleostomi
+ Tetrapoda  =  Tetrapoda
+ Amniota  =  Amniota
+ Mammalia  =  Mammalia
+ Theria  =  Mammalia
+ Eutheria  =  Eutheria
+ Boreoeutheria  =  Boreoeutheria
+ Euarchontoglires  =  Euarchontoglires
+ Scandentia/Primates  =  Euarchontoglires
+ Primates  =  Primates
+ Haplorrhini  =  Primates
+ Simiiformes  =  Primates
+ Catarrhini  =  Primates
+ Hominoidea  =  Primates
+ Hominidae  =  Primates
+ Homininae  =  Primates
+ Hominini  =  Primates
+ Homo  =  Primates
+ Homo_sapiens  =  Primates
 
 =head1 LICENSE
 

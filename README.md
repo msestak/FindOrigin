@@ -22,8 +22,8 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
     FindOrigin.pm --mode=blastout_uniq -d hs_plus -v
 
-    # update report_per_ps table with unique and intersect hts and gene lists
-    FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v
+    # update report_ps_tbl table with unique and intersect hts and gene lists
+    FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
     # import full BLAST database (plus ti and pgi columns)
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
@@ -104,15 +104,15 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
     It creates a unique non-redundant blastout\_uniq table with only relevant information (prot\_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
     From that blastout\_uniq\_tbl it creates report\_gene\_hit\_per\_species\_tbl2 which holds summary of per phylostrata per species of BLAST output analysis (ps, ti, species\_name, gene\_hits\_per\_species, genelist).
 
-- report\_per\_ps\_unique
+- bl\_uniq\_expanded
 
         # options from command line
-        FindOrigin.pm --mode=report_per_ps_unique -o t/data/ --report_per_ps=hs_all_plus_21_12_2015_report_per_ps -d hs_plus -v -p msandbox -u msandbox -po 8123
+        FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
         # options from config
-        FindOrigin.pm --mode=report_per_ps_unique -d hs_plus -v
+        FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
-    Update report\_per\_ps table with unique and intersect hits and gene lists.
+    Update report\_ps\_tbl table with unique and intersect hits and gene lists.
 
 - import\_blastout\_full
 
@@ -162,19 +162,157 @@ All configuration in set in blastoutanalyze.cnf that is found in ./lib directory
 Example:
 
     [General]
-    #in       = /home/msestak/prepare_blast/out/dr_plus/
-    #out      = /msestak/gitdir/ClickHouseinstall
-    #infile   = /home/msestak/mysql-5.6.27-linux-glibc2.5-x86_64.tar.gz
-    #outfile  = /home/msestak/prepare_blast/out/dr_04_02_2016.xlsx
+    #in       = t/data/
+    out      =  t/data/
+    #infile   = t/data/
+    #outfile  = t/data/
     
     [Database]
-    host     = localhost
-    database = test_db_here
-    user     = msandbox
-    password = msandbox
-    port     = 8123
-    socket   = /tmp/mysql_sandbox8123.sock
-    charset  = ascii
+    host      = localhost
+    database  = test
+    #user     = default
+    #password = ''
+    port      = 8123
+    
+    [Tables]
+    blastout_tbl   = hs_1mil
+    names_tbl      = names_dmp_fmt_new
+    map_tbl        = hs3_map
+    stats_ps_tbl   = analyze_hs_9606_all_ff_for_db_stats_ps
+    stats_gen_tbl  = analyze_hs_9606_all_ff_for_db_stats_genomes
+    blastdb_tbl    = ''
+    report_ps_tbl  = hs_1mil_report_per_species
+    report_exp_tbl = hs_1mil_report_per_species_expanded
+    
+    [Files]
+    blastdb  = t/data/dbfull.gz
+    blastout = t/data/hs_all_plus_21_12_2015.gz
+    map      = t/data/hs3.phmap_names
+    names    = t/data/names.dmp.fmt.new.gz
+    stats    = t/data/analyze_hs_9606_all_ff_for_db
+    
+    [PS]
+    1   =  1
+    2   =  2
+    3   =  2
+    4   =  2
+    5   =  3
+    6   =  4
+    7   =  4
+    8   =  4
+    9   =  5
+    10  =  6
+    11  =  6
+    12  =  7
+    13  =  8
+    14  =  9
+    15  =  10
+    16  =  11
+    17  =  11
+    18  =  11
+    19  =  12
+    20  =  12
+    21  =  12
+    22  =  13
+    23  =  14
+    24  =  15
+    25  =  15
+    26  =  16
+    27  =  17
+    28  =  18
+    29  =  18
+    30  =  19
+    31  =  19
+    32  =  19
+    33  =  19
+    34  =  19
+    35  =  19
+    36  =  19
+    37  =  19
+    38  =  19
+    39  =  19
+    
+    [TI]
+    131567   =  131567
+    2759     =  2759
+    1708629  =  2759
+    1708631  =  2759
+    33154    =  33154
+    1708671  =  1708671
+    1708672  =  1708671
+    1708673  =  1708671
+    33208    =  33208
+    6072     =  6072
+    1708696  =  6072
+    33213    =  33213
+    33511    =  33511
+    7711     =  7711
+    1708690  =  1708690
+    7742     =  7742
+    7776     =  7742
+    117570   =  7742
+    117571   =  117571
+    8287     =  117571
+    1338369  =  117571
+    32523    =  32523
+    32524    =  32524
+    40674    =  40674
+    32525    =  40674
+    9347     =  9347
+    1437010  =  1437010
+    314146   =  314146
+    1708730  =  314146
+    9443     =  9443
+    376913   =  9443
+    314293   =  9443
+    9526     =  9443
+    314295   =  9443
+    9604     =  9443
+    207598   =  9443
+    1708693  =  9443
+    9605     =  9443
+    9606     =  9443
+    
+    [PSNAME]
+    cellular_organisms  =  cellular_organisms
+    Eukaryota  =  Eukaryota
+    Unikonta  =  Eukaryota
+    Apusozoa/Opisthokonta  =  Eukaryota
+    Opisthokonta  =  Opisthokonta
+    Holozoa  =  Holozoa
+    Filozoa  =  Holozoa
+    Metazoa/Choanoflagellida  =  Holozoa
+    Metazoa  =  Metazoa
+    Eumetazoa  =  Eumetazoa
+    Cnidaria/Bilateria  =  Eumetazoa
+    Bilateria  =  Bilateria
+    Deuterostomia  =  Deuterostomia
+    Chordata  =  Chordata
+    Olfactores  =  Olfactores
+    Vertebrata  =  Vertebrata
+    Gnathostomata  =  Vertebrata
+    Teleostomi  =  Vertebrata
+    Euteleostomi  =  Euteleostomi
+    Sarcopterygii  =  Euteleostomi
+    Dipnotetrapodomorpha  =  Euteleostomi
+    Tetrapoda  =  Tetrapoda
+    Amniota  =  Amniota
+    Mammalia  =  Mammalia
+    Theria  =  Mammalia
+    Eutheria  =  Eutheria
+    Boreoeutheria  =  Boreoeutheria
+    Euarchontoglires  =  Euarchontoglires
+    Scandentia/Primates  =  Euarchontoglires
+    Primates  =  Primates
+    Haplorrhini  =  Primates
+    Simiiformes  =  Primates
+    Catarrhini  =  Primates
+    Hominoidea  =  Primates
+    Hominidae  =  Primates
+    Homininae  =  Primates
+    Hominini  =  Primates
+    Homo  =  Primates
+    Homo_sapiens  =  Primates
 
 # LICENSE
 

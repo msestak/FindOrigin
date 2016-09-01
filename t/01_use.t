@@ -18,6 +18,7 @@ my @subs = qw(
   import_blastdb_stats
   import_names
   blastout_uniq
+  bl_uniq_expanded
 );
 
 use_ok( $module, @subs);
