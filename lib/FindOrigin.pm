@@ -486,9 +486,6 @@ sub create_db {
     my $query_del    = qq{DROP DATABASE IF EXISTS $database};
     my $query_create = qq{CREATE DATABASE IF NOT EXISTS $database};
 
-    #first report what are you doing
-    $log->info("---------->{$database} database creation");
-
     # drop database
     my ( $success_del, $res_del ) = _http_exec_query( { query => $query_del, %$param_href } );
     $log->error("Action: dropping $database failed!") unless $success_del;
@@ -497,7 +494,7 @@ sub create_db {
     # create database
     my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
     $log->error("Action: creating $database failed!") unless $success_create;
-    $log->error("Action: database $database created successfully!") if $success_create;
+    $log->info("Action: database {$database} created successfully!") if $success_create;
 
     return;
 }

@@ -29,3 +29,4 @@ cover_db/
 MYMETA.*
 
 /FindOrigin-*
+lib/FindOrigin.log
