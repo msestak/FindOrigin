@@ -8,7 +8,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=create_db -d test_db_here
 
     # import BLAST output file into ClickHouse database
-    FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
+    FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
     FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
@@ -51,13 +51,13 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_blastout
 
         # options from command line
-        FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz -ho localhost -po 8123 -v
+        FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz -ho localhost -po 8123 -v
 
         # options from config
-        FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
+        FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz
 
     Imports compressed BLAST output file (.gz needs pigz) into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
-    It drops and recreates table where it will import and runs separate query at end to return numer of rows inserted.
+    It drops and recreates table in a database where it will import it and runs separate query at end to return number of rows inserted.
 
 - import\_map
 
@@ -113,30 +113,6 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
         FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
     Update report\_ps\_tbl table with unique and intersect hits and gene lists.
-
-- import\_blastout\_full
-
-        # options from command line
-        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v -p msandbox -u msandbox -po 8123
-
-        # options from config
-        FindOrigin.pm --mode=import_blastout -if t/data/hs_all_plus_21_12_2015 -d hs_blastout -v
-
-    Extracts hit column and splits it on ti and pgi and imports this file into ClickHouse (it has 2 extra columns = ti and pgi with no duplicates). It needs ClickHouse connection parameters to connect to ClickHouse.
-
-        [2016/04/20 16:12:42,230] INFO> FindOrigin::run line:101==>RUNNING ACTION for mode: import_blastout_full
-        [2016/04/20 16:12:42,232]DEBUG> FindOrigin::_extract_blastout_full line:1644==>Report: started processing of /home/msestak/prepare_blast/out/random/hs_all_plus_21_12_2015_good
-        [2016/04/20 16:12:51,790]TRACE> FindOrigin::_extract_blastout_full line:1664==>1000000 lines processed!
-        ...  Perl processing (3.5 h)
-        [2016/04/20 19:37:59,376]TRACE> FindOrigin::_extract_blastout_full line:1664==>1151000000 lines processed!
-        [2016/04/20 19:38:07,991] INFO> FindOrigin::_extract_blastout_full line:1670==>Report: file /home/msestak/prepare_blast/out/random/hs_all_plus_21_12_2015_good_formated printed successfully with 503625726 lines (from 1151804042 original lines)
-        [2016/04/20 19:38:08,034]TRACE> FindOrigin::import_blastout_full line:1575==>Time running:0 sec    STATE:Fetched about 2000 rows, loading data still remains
-        ... Load (50 min)
-        [2016/04/20 20:28:58,788] INFO> FindOrigin::import_blastout_full line:1581==>Action: import inserted 503625726 rows!
-        [2016/04/20 20:28:58,807]TRACE> FindOrigin::import_blastout_full line:1603==>Time running:0 sec    STATE:Adding indexes
-        ... indexing (33 min)
-        [2016/04/20 21:01:59,155] INFO> FindOrigin::import_blastout_full line:1610==>Action: Indices protx and tix on hs_all_plus_21_12_2015_good added successfully!
-        [2016/04/20 21:01:59,156] INFO> FindOrigin::run line:105==>TIME when finished for: import_blastout_full
 
 - import\_blastdb
 

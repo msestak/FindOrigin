@@ -470,10 +470,11 @@ sub _http_exec_query {
 
 
 ### INTERFACE SUB ###
-# Usage      : --mode=create_db
+# Usage      : --mode=create_db -d test_db_here
 # Purpose    : creates database in ClickHouse
 # Returns    : nothing
 # Parameters : ( $param_href ) -> params from command line to connect to ClickHouse
+#            : -d (database name)
 # Throws     : croaks if wrong number of parameters
 # Comments   : run only once at start (it drops database)
 # See Also   :
@@ -513,7 +514,7 @@ sub import_blastout {
     $log->logcroak('import_blastout() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
 
-    my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
+    my $infile = $param_href->{blastout} or $log->logcroak('no --blastout=filename specified on command line!');
     my $table = path($infile)->basename;
     $table =~ s/\./_/g;    #for files that have dots in name
     $table =~ s/_gz//g;    #for files that have dots in name
@@ -1907,7 +1908,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=create_db -d test_db_here
 
     # import BLAST output file into ClickHouse database
-    FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
+    FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
     FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
@@ -1953,13 +1954,13 @@ Drops ( if it exists) and recreates database in ClickHouse (needs ClickHouse con
 =item import_blastout
 
  # options from command line
- FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz -ho localhost -po 8123 -v
+ FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_blastout -d jura -if /msestak/hs_1mil.gz
+ FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz
 
 Imports compressed BLAST output file (.gz needs pigz) into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
-It drops and recreates table where it will import and runs separate query at end to return numer of rows inserted.
+It drops and recreates table in a database where it will import it and runs separate query at end to return number of rows inserted.
 
 =item import_map
 
