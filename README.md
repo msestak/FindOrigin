@@ -14,7 +14,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
 
     # imports analyze stats file created by AnalyzePhyloDb (uses TI and PS sections in config)
-    FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
+    FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -v
 
     # import names file for species_name
     FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
@@ -73,10 +73,10 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_blastdb\_stats
 
         # options from command line
-        FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -ho localhost -po 8123 -v
+        FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -ho localhost -po 8123 -v
 
         # options from config
-        FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
+        FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -v
 
     Imports analyze stats file created by AnalyzePhyloDb.
      AnalysePhyloDb -n nr\_raw/nodes.dmp.fmt.new.sync -t 9606 -d ./all\_ff\_for\_db/ > analyze\_hs\_9606\_all\_ff\_for\_db

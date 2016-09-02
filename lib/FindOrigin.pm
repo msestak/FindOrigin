@@ -177,7 +177,7 @@ sub get_parameters_from_cmd {
         'blastdb=s'  => \$cli{blastdb},
         'names|na=s' => \$cli{names},
         'map=s'      => \$cli{map},
-        'stats'      => \$cli{stats},
+        'stats=s'    => \$cli{stats},
 
         'tax_id|ti=i' => \$cli{tax_id},
 
@@ -686,18 +686,18 @@ sub import_blastdb_stats {
     $log->logcroak('import_blastdb_stats() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
 
-    my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
-    my $stats_ps_tbl = path($infile)->basename;
+    my $stats = $param_href->{stats} or $log->logcroak('no --stats=filename specified on command line!');
+    my $stats_ps_tbl = path($stats)->basename;
     $stats_ps_tbl .= '_stats_ps';
-    my $stats_genomes_tbl = path($infile)->basename;
+    my $stats_genomes_tbl = path($stats)->basename;
     $stats_genomes_tbl .= '_stats_genomes';
 
     # create tmp file for phylostrata part of stats file
-    my $tmp_ps = path( path($infile)->parent, $stats_ps_tbl );
+    my $tmp_ps = path( path($stats)->parent, $stats_ps_tbl );
     open( my $tmp_ps_fh, ">", $tmp_ps ) or $log->logdie("Error: can't open ps_stats $tmp_ps for writing:$!");
 
     # create tmp file for genomes part of stats file
-    my $tmp_stats = path( path($infile)->parent, $stats_genomes_tbl );
+    my $tmp_stats = path( path($stats)->parent, $stats_genomes_tbl );
     open( my $tmp_stats_fh, ">", $tmp_stats )
       or $log->logdie("Error: can't open genomes_stats $tmp_stats for writing:$!");
 
@@ -824,8 +824,8 @@ sub _read_stats_file {
     my ($p_href) = @_;
 
     # read and write to files
-    open( my $stats_fh, "<", $p_href->{infile} )
-      or $log->logdie("Error: can't open file $p_href->{infile} for reading:$!");
+    open( my $stats_fh, "<", $p_href->{stats} )
+      or $log->logdie("Error: can't open file $p_href->{stats} for reading:$!");
     while (<$stats_fh>) {
         chomp;
 
@@ -1914,7 +1914,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
 
     # imports analyze stats file created by AnalyzePhyloDb (uses TI and PS sections in config)
-    FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
+    FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -v
 
     # import names file for species_name
     FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
@@ -1976,10 +1976,10 @@ It can use PS, TI and PSNAME config sections.
 =item import_blastdb_stats
 
  # options from command line
- FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -ho localhost -po 8123 -v
+ FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
+ FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -v
 
 Imports analyze stats file created by AnalyzePhyloDb.
  AnalysePhyloDb -n nr_raw/nodes.dmp.fmt.new.sync -t 9606 -d ./all_ff_for_db/ > analyze_hs_9606_all_ff_for_db
