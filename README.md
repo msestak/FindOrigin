@@ -28,6 +28,9 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # import full BLAST database (plus ti and pgi columns)
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
 
+    # run import and analysis for all blast output files
+    FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
+
 # DESCRIPTION
 
 FindOrigin is modulino used to analyze BLAST database (to get content in genomes and sequences) and BLAST output (to figure out where are hits coming from). It includes config, command-line and logging management.
@@ -131,6 +134,14 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
         ... Indexing (2 min)
         [2016/04/22 00:43:52,588] INFO> FindOrigin::import_blastdb line:1850==>Action: Index tix on db90_gz added successfully!
         [2016/04/22 00:43:52,590] INFO> FindOrigin::run line:109==>TIME when finished for: import_blastdb
+
+- queue\_and\_run
+
+        # options from command line
+        FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
+
+    Imports all BLAST output files in a given directory and calculates unique hits per species for all one by one.
+    It first creates database where it will run.
 
 # CONFIGURATION
 

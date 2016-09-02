@@ -36,6 +36,7 @@ our @EXPORT_OK = qw{
   import_names
   blastout_uniq
   bl_uniq_expanded
+  queue_and_run
 
 };
 
@@ -86,6 +87,7 @@ sub run {
         blastout_uniq        => \&blastout_uniq,           # analyzes BLAST output file using map, names and blastout tables
         bl_uniq_expanded     => \&bl_uniq_expanded,        # add unique BLAST hits per species
         import_blastdb       => \&import_blastdb,          # import BLAST database with all columns
+        queue_and_run        => \&queue_and_run,           # runs all steps for all blastout files
 
     );
 
@@ -1892,6 +1894,43 @@ sub _drop_columns_ch {
 }
 
 
+### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+# Usage      : --mode=queue_and_run
+# Purpose    : to run all steps for multiple blast output files
+# Returns    : nothing
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : runs sequentially for each blast output file
+# See Also   : 
+sub queue_and_run {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('queue_and_run() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $in       = $param_href->{in}       or $log->logcroak('no --in=dir specified on command line!');
+    my $database = $param_href->{database} or $log->logcroak('no --database=db_name specified on command line!');
+    my $names    = $param_href->{names}    or $log->logcroak('no --names=names_tsv specified on command line!');
+    my $stats    = $param_href->{stats}    or $log->logcroak('no --stats=filename specified on command line!');
+
+    # create database
+    create_db($param_href);
+
+    # import names file
+    import_names($param_href);
+
+    # import stats file
+    import_blastdb_stats($param_href);
+
+    # import phylo_map for organism
+
+    # get all blastout files from indir
+    my @blastout_files = File::Find::Rule->file()->name(qr/\A.+\.gz\z/)->in($in);
+    @blastout_files = sort { $a cmp $b } @blastout_files;
+    print Dumper( \@blastout_files );
+
+    return;
+}
+
 
 1;
 __END__
@@ -1927,6 +1966,9 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
 
     # import full BLAST database (plus ti and pgi columns)
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
+
+    # run import and analysis for all blast output files
+    FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
 
 
 =head1 DESCRIPTION
@@ -2034,6 +2076,14 @@ Imports BLAST database file into ClickHouse (it has 2 extra columns = ti and pgi
  ... Indexing (2 min)
  [2016/04/22 00:43:52,588] INFO> FindOrigin::import_blastdb line:1850==>Action: Index tix on db90_gz added successfully!
  [2016/04/22 00:43:52,590] INFO> FindOrigin::run line:109==>TIME when finished for: import_blastdb
+
+=item queue_and_run
+
+ # options from command line
+ FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
+
+Imports all BLAST output files in a given directory and calculates unique hits per species for all one by one.
+It first creates database where it will run.
 
 =back
 

@@ -19,6 +19,7 @@ my @subs = qw(
   import_names
   blastout_uniq
   bl_uniq_expanded
+  queue_and_run
 );
 
 use_ok( $module, @subs);
