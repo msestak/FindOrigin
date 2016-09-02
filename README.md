@@ -11,7 +11,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
-    FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
+    FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
 
     # imports analyze stats file created by AnalyzePhyloDb (uses TI and PS sections in config)
     FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
@@ -62,10 +62,10 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - import\_map
 
         # options from command line
-        FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -ho localhost -po 8123 -v
+        FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -ho localhost -po 8123 -v
 
         # options from config
-        FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
+        FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
 
     Removes header from map file and writes columns (prot\_id, phylostrata, ti, psname) to tmp file and imports that file into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
     It can use PS, TI and PSNAME config sections.

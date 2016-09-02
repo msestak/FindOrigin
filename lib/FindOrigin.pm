@@ -569,20 +569,20 @@ sub import_map {
     my ($param_href) = @_;
 
     # check required parameters
-    if ( !exists $param_href->{infile} ) { $log->logcroak('no $infile specified on command line!'); }
+    if ( !exists $param_href->{map} ) { $log->logcroak('no --map=filename specified on command line!'); }
 
     # get name of map table
-    my $map_tbl = path( $param_href->{infile} )->basename;
+    my $map_tbl = path( $param_href->{map} )->basename;
     ($map_tbl) = $map_tbl =~ m/\A([^\.]+)\.phmap_names\z/;
     $map_tbl .= '_map';
 
     # create tmp filename in same dir as input map with header
-    my $temp_map = path( path( $param_href->{infile} )->parent, $map_tbl );
+    my $temp_map = path( path( $param_href->{map} )->parent, $map_tbl );
     open( my $tmp_fh, ">", $temp_map ) or $log->logdie("Error: can't open map $temp_map for writing:$!");
 
     # need to skip header
-    open( my $map_fh, "<", $param_href->{infile} )
-      or $log->logdie("Error: can't open map $param_href->{infile} for reading:$!");
+    open( my $map_fh, "<", $param_href->{map} )
+      or $log->logdie("Error: can't open map $param_href->{map} for reading:$!");
     while (<$map_fh>) {
         chomp;
 
@@ -1911,7 +1911,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
-    FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
+    FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
 
     # imports analyze stats file created by AnalyzePhyloDb (uses TI and PS sections in config)
     FindOrigin.pm --mode=import_blastdb_stats -d jura -if ./t/data/analyze_hs_9606_all_ff_for_db -v
@@ -1965,10 +1965,10 @@ It drops and recreates table in a database where it will import it and runs sepa
 =item import_map
 
  # options from command line
- FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -ho localhost -po 8123 -v
+ FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_map -d jura -if ./t/data/hs3.phmap_names -v
+ FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
 
 Removes header from map file and writes columns (prot_id, phylostrata, ti, psname) to tmp file and imports that file into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
 It can use PS, TI and PSNAME config sections.
