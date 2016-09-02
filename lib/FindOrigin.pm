@@ -903,8 +903,8 @@ sub import_names {
     $log->logcroak('import_names() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
 
-    my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
-    my $names_tbl = path($infile)->basename;
+    my $names = $param_href->{names} or $log->logcroak('no $names specified on command line!');
+    my $names_tbl = path($names)->basename;
     $names_tbl =~ s/\./_/g;    # for files that have dots in name
     $names_tbl =~ s/_gz//g;    # for compressed files
 
@@ -927,7 +927,7 @@ sub import_names {
     # import into table (in ClickHouse) from gziped file (needs pigz)
     my $import_query
       = qq{INSERT INTO $param_href->{database}.$names_tbl (ti, species_name, name_syn, name_type) FORMAT TabSeparated};
-    my $import_cmd = qq{ pigz -c -d $infile | clickhouse-client --query "$import_query"};
+    my $import_cmd = qq{ pigz -c -d $names | clickhouse-client --query "$import_query"};
     _import_into_table_ch( { import_cmd => $import_cmd, table_name => $names_tbl, %$param_href } );
 
     # check number of rows inserted
@@ -1908,7 +1908,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=create_db -d test_db_here
 
     # import BLAST output file into ClickHouse database
-    FindOrigin.pm --mode=import_blastout -d jura --blastout t/data/hs_all_plus_21_12_2015.gz
+    FindOrigin.pm --mode=import_blastout -d jura --blastout=t/data/hs_all_plus_21_12_2015.gz
 
     # remove header and import phylostratigraphic map into ClickHouse database (reads PS, TI and PSNAME from config)
     FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
@@ -1917,7 +1917,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -v
 
     # import names file for species_name
-    FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
+    FindOrigin.pm --mode=import_names -d jura --names=t/data/names.dmp.fmt.new.gz -v
 
     # runs BLAST output analysis - expanding every prot_id to its tax_id hits and species names
     FindOrigin.pm --mode=blastout_uniq -d hs_plus -v
@@ -1989,20 +1989,20 @@ It can use PS and TI config sections.
 =item import_names
 
  # options from command line
- FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -ho localhost -po 8123 -v
+ FindOrigin.pm --mode=import_names -d jura --names=t/data/names.dmp.fmt.new.gz -ho localhost -po 8123 -v
 
  # options from config
- FindOrigin.pm --mode=import_names -d jura -if ./t/data/names.dmp.fmt.new.gz -v
+ FindOrigin.pm --mode=import_names -d jura --names=t/data/names.dmp.fmt.new.gz -v
 
 Imports names file (columns ti, species_name) into ClickHouse.
 
 =item blastout_uniq
 
  # options from command line
- perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
+ FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
  # options from config
- perl lib/FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
+ FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
 
 It creates a unique non-redundant blastout_uniq table with only relevant information (prot_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
 From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl2 which holds summary of per phylostrata per species of BLAST output analysis (ps, ti, species_name, gene_hits_per_species, genelist).
