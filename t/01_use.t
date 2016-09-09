@@ -20,6 +20,7 @@ my @subs = qw(
   blastout_uniq
   bl_uniq_expanded
   queue_and_run
+  exclude_ti_from_blastout
 );
 
 use_ok( $module, @subs);
