@@ -19,6 +19,7 @@ my @subs = qw(
   import_names
   blastout_uniq
   bl_uniq_expanded
+  exclude_ti_from_blastout
 );
 
 use_ok( $module, @subs);

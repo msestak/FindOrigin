@@ -19,6 +19,7 @@ use Config::Std { def_sep => '=' };   #ClickHouse uses =
 use POSIX qw(mkfifo);
 use HTTP::Tiny;
 use ClickHouse;
+use PerlIO::gzip;
 
 our $VERSION = "0.01";
 
@@ -36,6 +37,7 @@ our @EXPORT_OK = qw{
   import_names
   blastout_uniq
   bl_uniq_expanded
+  exclude_ti_from_blastout
 
 };
 
@@ -86,6 +88,8 @@ sub run {
         blastout_uniq        => \&blastout_uniq,           # analyzes BLAST output file using map, names and blastout tables
         bl_uniq_expanded     => \&bl_uniq_expanded,        # add unique BLAST hits per species
         import_blastdb       => \&import_blastdb,          # import BLAST database with all columns
+        exclude_ti_from_blastout =>
+                            \&exclude_ti_from_blastout,    # excludes specific tax_id from BLAST output file
 
     );
 
@@ -1892,6 +1896,72 @@ sub _drop_columns_ch {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : --mode=exclude_ti_from_blastout();
+# Purpose    : excludes tax_id from blastout file and saves new file to disk
+# Returns    : nothing
+# Parameters : ($param_href)
+# Throws     : croaks for parameters
+# Comments   : works with gziped file
+# See Also   : 
+sub exclude_ti_from_blastout {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('exclude_ti_from_blastout() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $infile = $param_href->{blastout} or $log->logcroak('no $infile specified on command line!');
+    my $tax_id = $param_href->{tax_id}   or $log->logcroak('no $tax_id specified on command line!');
+    my $blastout = path($infile)->basename;
+    ($blastout = $blastout) =~ s/\A(.+)\.gz\z/$1/;
+    my $blastout_good = path( path($infile)->parent, $blastout . "_good.gz" );
+    my $blastout_bad  = path( path($infile)->parent, $blastout . "_bad.gz" );
+
+    open( my $blastout_fh, "pigz -c -d $infile |" ) or $log->logdie("Error: blastout file $infile not found:$!");
+    open( my $blastout_good_fh, ">:gzip", $blastout_good )
+      or $log->logdie("Error: can't open good output {$blastout_good} for writing:$!");
+    open( my $blastout_bad_fh, ">:gzip", $blastout_bad )
+      or $log->logdie("Error: can't open bad output {$blastout_bad} for writing :$!");
+
+#in blastout
+#ENSG00000151914|ENSP00000354508    pgi|34252924|ti|9606|pi|0|  100.00  7461    0   0   1   7461    1   7461    0.0 1.437e+04
+
+    local $.;
+    my $i_good = 0;
+    my $i_bad  = 0;
+    while (<$blastout_fh>) {
+        chomp;
+        my ( undef, $id, undef, undef, undef, undef, undef, undef, undef, undef, undef, undef ) = split "\t", $_;
+        my ( undef, undef, undef, $ti, undef, undef ) = split( /\|/, $id );    #pgi|0000000000042857453|ti|428574|pi|0|
+                # any string that is not a single space (chr(32)) will implicitly be used as a regex, so split '|' will still be split /|/ and thus equal split //
+
+        #progress tracker
+        if ( $. % 1000000 == 0 ) {
+            $log->trace("$. lines processed!");
+        }
+
+        #if found bad id exclude from blastout
+        if ( $ti == $tax_id ) {
+            $i_bad++;
+            say {$blastout_bad_fh} $_;
+        }
+        else {
+            $i_good++;
+            say {$blastout_good_fh} $_;
+        }
+
+    }
+
+    #give info about what you did
+    $log->info("Report: file $blastout read successfully with $. lines");
+    $log->info("Report: file $blastout_good printed successfully with $i_good lines");
+    $log->info("Report: file $blastout_bad printed successfully with $i_bad lines");
+
+    close $blastout_fh;
+    close $blastout_good_fh;
+    close $blastout_bad_fh;
+
+    return;
+}
 
 1;
 __END__
@@ -1927,6 +1997,9 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
 
     # import full BLAST database (plus ti and pgi columns)
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
+
+    # removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
+    FindOrigin.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
 
 
 =head1 DESCRIPTION
@@ -2016,6 +2089,17 @@ From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl2 which ho
  FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
 Update report_ps_tbl table with unique and intersect hits and gene lists.
+
+=item exclude_ti_from_blastout
+
+ # options from command line
+ lib/BlastoutAnalyze.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
+
+ # options from config
+ lib/BlastoutAnalyze.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
+
+Removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes). It works with gziped BLAST output and writes gziped files.
+
 
 =item import_blastdb
 
