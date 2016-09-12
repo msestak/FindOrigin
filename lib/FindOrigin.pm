@@ -510,7 +510,7 @@ sub create_db {
 ### INTERFACE SUB ###
 # Usage      : --mode=import_blastout
 # Purpose    : imports BLAST output to ClickHouse database
-# Returns    : nothing
+# Returns    : blastout table name
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
 # Comments   :
@@ -558,13 +558,13 @@ sub import_blastout {
     $log->debug("Error: counting rows in $table failed!") unless $success_cnt;
     $log->info("Action: inserted $res_cnt rows into {$table}") if $success_cnt;
 
-    return;
+    return $table;
 }
 
 ### INTERNAL UTILITY ###
 # Usage      : --mode=import_map on command line
 # Purpose    : imports map with header format and psname (.phmap_names)
-# Returns    : nothing
+# Returns    : name of the map_tbl
 # Parameters : full path to map file and database connection parameters
 # Throws     : croaks if wrong number of parameters
 # Comments   : creates temp files without header for final load
@@ -581,6 +581,7 @@ sub import_map {
     my $map_tbl = path( $param_href->{map} )->basename;
     ($map_tbl) = $map_tbl =~ m/\A([^\.]+)\.phmap_names\z/;
     $map_tbl .= '_map';
+    $map_tbl =~ s/\./_/g;    #for files that have dots in name
 
     # create tmp filename in same dir as input map with header
     my $temp_map = path( path( $param_href->{map} )->parent, $map_tbl );
@@ -675,14 +676,14 @@ sub import_map {
     # unlink tmp map file
     unlink $temp_map and $log->warn("Action: $temp_map unlinked");
 
-    return;
+    return $map_tbl;
 }
 
 
 ### INTERFACE SUB ###
 # Usage      : --mode=import_blastdb_stats
 # Purpose    : import BLAST db stats created by AnalyzePhyloDb
-# Returns    : nothing
+# Returns    : names of stats_ps_tbl and stats_gen_tbl
 # Parameters : infile and connection paramaters
 # Throws     : croaks if wrong number of parameters
 # Comments   : splits analyze file into 2 files (ps summary and genomes list)
@@ -693,6 +694,7 @@ sub import_blastdb_stats {
     my ($param_href) = @_;
 
     my $stats = $param_href->{stats} or $log->logcroak('no --stats=filename specified on command line!');
+    $stats =~ s/\./_/g;    #for files that have dots in name
     my $stats_ps_tbl = path($stats)->basename;
     $stats_ps_tbl .= '_stats_ps';
     my $stats_genomes_tbl = path($stats)->basename;
@@ -813,7 +815,7 @@ sub import_blastdb_stats {
     #unlink $tmp_ps and $log->warn("Action: $tmp_ps unlinked");
     #unlink $tmp_stats and $log->warn("Action: $tmp_stats unlinked");
 
-    return;
+    return $stats_ps_tbl, $stats_genomes_tbl;
 }
 
 ### INTERNAL UTILITY ###
@@ -1142,7 +1144,7 @@ sub blastout_uniq_orig {
 ### INTERFACE SUB ###
 # Usage      : --mode=blastout_uniq
 # Purpose    : creates unique blastout table for analysis (essence of blastout file) and report_gene_hits_per_species_tbl
-# Returns    : nothing
+# Returns    : returns names of the blastout_uniq_tbl, blout_species_tbl and report_ps_tbl tables
 # Parameters : it needs blastout_tbl
 # Throws     : croaks if wrong number of parameters
 # Comments   : runs in around half a hour
@@ -1339,6 +1341,7 @@ sub blastout_uniq {
 
     # PART 6: DROP EXTRA TABLES AND RENAME REPORT TABLE
     #_drop_table_only_ch( { table_name => $blastout_uniq_tbl, ch => $ch, %{$param_href} } );
+    _drop_table_only_ch( { table_name => $param_href->{blastout_tbl}, ch => $ch, %{$param_href} } );         # drops imported blast output
     _drop_table_only_ch( { table_name => $blout_ps_tbl,      ch => $ch, %{$param_href} } );
     _drop_table_only_ch( { table_name => $blout_analyze_tbl, ch => $ch, %{$param_href} } );
     _drop_table_only_ch( { table_name => $report_gene_hits_per_species_tbl, ch => $ch, %{$param_href} } );
@@ -1352,14 +1355,14 @@ sub blastout_uniq {
         "Action: {$param_href->{database}.${report_gene_hits_per_species_tbl}2} renamed to {$param_href->{database}.${report_gene_hits_per_species_tbl}} successfully"
     ) unless $@;
 
-    return;
+    return $blastout_uniq_tbl, $blout_species_tbl, $report_gene_hits_per_species_tbl;
 }
 
 
 ### INTERFACE SUB ###
 # Usage      : --mode=bl_uniq_expanded
 # Purpose    : expands genehits into types (how many hits per phylostratum) to find repeating and unique hits
-# Returns    : nothing
+# Returns    : name of the report_exp_tbl table
 # Parameters : 
 # Throws     : croaks if wrong number of parameters
 # Comments   : works with report table that --mode=blastout_uniq created
@@ -1537,7 +1540,7 @@ sub bl_uniq_expanded {
         "Action: {$param_href->{database}.$report_ps_tbl_exp2} renamed to {$param_href->{database}.$report_ps_tbl_exp} successfully"
     ) unless $@;
 
-    return;
+    return $report_ps_tbl_exp;
 }
 
 
@@ -1759,7 +1762,7 @@ sub _get_ch {
 
 
 ### INTERNAL UTILITY ###
-# Usage      : _create_table_ch( { table_name => $table_info, ch => $ch, query => $create_query, %{$param_href} } );
+# Usage      : _create_table_ch( { table_name => $table_info, ch => $ch, query => $create_query, drop => 1, %{$param_href} } );
 # Purpose    : it drops and recreates table in ClickHouse
 # Returns    : nothing
 # Parameters : hash_ref of table_name, dbh and query
@@ -1771,16 +1774,23 @@ sub _create_table_ch {
     $log->logcroak('_create_table_ch() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
 
-    my $table_name   = $param_href->{table_name} or $log->logcroak('no $table_name sent to _create_table_ch()!');
-    my $ch           = $param_href->{ch}         or $log->logcroak('no $ch sent to _create_table_ch()!');
-    my $create_query = $param_href->{query}      or $log->logcroak('no $query sent to _create_table_ch()!');
+    my $table_name    = $param_href->{table_name} or $log->logcroak('no $table_name sent to _create_table_ch()!');
+    my $ch            = $param_href->{ch}         or $log->logcroak('no $ch sent to _create_table_ch()!');
+    my $create_query  = $param_href->{query}      or $log->logcroak('no $query sent to _create_table_ch()!');
+    my $drop_decision = defined $param_href->{drop} ? $param_href->{drop} : 1;   # by default it drops table
+
+	# drop table by default, else leave it
+	if ($drop_decision == 1) {
+        my $drop_query = qq{ DROP TABLE IF EXISTS $param_href->{database}.$table_name };
+        eval { $ch->do($drop_query) };
+        $log->error("Error: dropping {$param_href->{database}.$table_name} failed: $@") if $@;
+        $log->trace("Action: {$param_href->{database}.$table_name} dropped successfully") unless $@;
+	}
+	else {
+		$log->warn("Warn: leaving table {$param_href->{database}.$table_name} in database");
+	}
 
 	#create table in database specified in connection
-    my $drop_query = qq{ DROP TABLE IF EXISTS $param_href->{database}.$table_name };
-    eval { $ch->do($drop_query) };
-    $log->error("Error: dropping {$param_href->{database}.$table_name} failed: $@") if $@;
-    $log->trace("Action: {$param_href->{database}.$table_name} dropped successfully") unless $@;
-
     eval { $ch->do($create_query) };
     $log->error( "Error: creating {$param_href->{database}.$table_name} failed: $@" ) if $@;
     $log->info( "Action: {$param_href->{database}.$table_name} created successfully" ) unless $@;
@@ -1922,17 +1932,93 @@ sub queue_and_run {
     # import names file
     import_names($param_href);
 
-    # import stats file
-    import_blastdb_stats($param_href);
+    # get all stats, maps and blastout files into a hash
+    my $organism_href = _collect_input_files($in);
 
-    # import phylo_map for organism
+    # now run import and analysis for each organism
+    while ( my ( $org_name, $files_href ) = each %{$organism_href} ) {
+        $log->warn("Working with $org_name!");
+
+        # import files for each organism
+        my $map_tbl = import_map( { %$param_href, map => $files_href->{map} } );
+
+        my ( $stats_ps_tbl, $stats_gen_tbl ) = import_blastdb_stats( { %$param_href, stats => $files_href->{stats} } );
+        my $blastout_tbl = import_blastout( { %$param_href, blastout => $files_href->{blastout}, } );
+        my ( $blastout_uniq_tbl, $blout_species_tbl, $report_ps_tbl ) = blastout_uniq(
+            {   %$param_href,
+                blastout_tbl  => $blastout_tbl,
+                stats_gen_tbl => $stats_gen_tbl,
+                map_tbl       => $map_tbl,
+            }
+        );
+        my $report_exp_tbl = bl_uniq_expanded( { %$param_href, report_ps_tbl => $report_ps_tbl } );
+    }
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : my $organism_href = _collect_input_files($in);
+# Purpose    : collects files (stats, maps, blast outpusts) for queue_and_run()
+# Returns    : hash ref of list of files
+# Parameters : input directorey where to search for files
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   : queue_and_run()
+sub _collect_input_files {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_collect_input_files() needs a $param_href') unless @_ == 1;
+    my ($in) = @_ or $log->logcroak('no $in_dir sent to _collect_input_files()!');
+
+    # get all stats files
+    my @stats_files = File::Find::Rule->file()->name(qr/\A.+\.analyze\z/)->in($in);
+    @stats_files = sort { $a cmp $b } @stats_files;
+    print Dumper( \@stats_files );
+
+    # get all phylo_maps for organisms
+    my @map_files = File::Find::Rule->file()->name(qr/\A.+\.phmap_names\z/)->in($in);
+    @map_files = sort { $a cmp $b } @map_files;
+    print Dumper( \@map_files );
 
     # get all blastout files from indir
     my @blastout_files = File::Find::Rule->file()->name(qr/\A.+\.gz\z/)->in($in);
     @blastout_files = sort { $a cmp $b } @blastout_files;
     print Dumper( \@blastout_files );
 
-    return;
+    # check for all files (each blastout needs map and stats)
+    my %organisms;
+	BLASTOUT:
+	foreach my $blastout (@blastout_files) {
+        my $bl_name = path($blastout)->basename;
+        say $bl_name;
+        ( my $organism ) = $bl_name =~ m/\A(.+?)\_.+\z/;
+        say $organism;
+
+        foreach my $map (@map_files) {
+            my $map_name = path($map)->basename;
+            say $map_name;
+            ( my $organism_map ) = $map_name =~ m/\A([^\d].+?)(?:\d+|\_)*.+\z/;
+            say $organism_map;
+
+            foreach my $stat (@stats_files) {
+                my $stat_name = path($stat)->basename;
+                say $stat_name;
+                ( my $organism_stat ) = $stat_name =~ m/\A(.+?)\_.+\z/;
+                say $organism_stat;
+
+                if ( $organism_map eq $organism && $organism_stat eq $organism ) {
+
+                    # put files under organism key
+                    $organisms{$organism} = { blastout => $blastout, map => $map, stats => $stat };
+					next BLASTOUT;   # if found go to nest blast output
+                }
+            }
+        }
+    }
+
+    print Dumper( \%organisms );
+    return \%organisms;
 }
 
 
@@ -2042,7 +2128,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
 
     # run import and analysis for all blast output files
-    FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
+    FindOrigin.pm --mode=queue_and_run -d kam --in=/msestak/blastout/ --names t/data/names.dmp.fmt.new.gz -v -v
 
     # removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
     FindOrigin.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
@@ -2168,10 +2254,10 @@ Imports BLAST database file into ClickHouse (it has 2 extra columns = ti and pgi
 =item queue_and_run
 
  # options from command line
- FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
+ FindOrigin.pm --mode=queue_and_run -d kam --in=/msestak/blastout/ --names t/data/names.dmp.fmt.new.gz -v -v
 
 Imports all BLAST output files in a given directory and calculates unique hits per species for all one by one.
-It first creates database where it will run.
+It first (re)creates database where it will run, imports names file only once and collects BLAST output, stats and map files and imports all these triplets.
 
 =back
 

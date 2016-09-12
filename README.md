@@ -29,7 +29,10 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
 
     # run import and analysis for all blast output files
-    FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
+    FindOrigin.pm --mode=queue_and_run -d kam --in=/msestak/blastout/ --names t/data/names.dmp.fmt.new.gz -v -v
+
+    # removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
+    FindOrigin.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
 
 # DESCRIPTION
 
@@ -117,6 +120,16 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 
     Update report\_ps\_tbl table with unique and intersect hits and gene lists.
 
+- exclude\_ti\_from\_blastout
+
+        # options from command line
+        lib/BlastoutAnalyze.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
+
+        # options from config
+        lib/BlastoutAnalyze.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
+
+    Removes specific hits from the BLAST output based on the specified tax\_id (exclude bad genomes). It works with gziped BLAST output and writes gziped files.
+
 - import\_blastdb
 
         # options from command line
@@ -138,10 +151,10 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 - queue\_and\_run
 
         # options from command line
-        FindOrigin.pm --mode=queue_and_run --database=all --in=/msestak/blastout/
+        FindOrigin.pm --mode=queue_and_run -d kam --in=/msestak/blastout/ --names t/data/names.dmp.fmt.new.gz -v -v
 
     Imports all BLAST output files in a given directory and calculates unique hits per species for all one by one.
-    It first creates database where it will run.
+    It first (re)creates database where it will run, imports names file only once and collects BLAST output, stats and map files and imports all these triplets.
 
 # CONFIGURATION
 
