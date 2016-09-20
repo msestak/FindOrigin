@@ -1994,8 +1994,11 @@ sub queue_and_run {
     my $database = $param_href->{database} or $log->logcroak('no --database=db_name specified on command line!');
     my $names    = $param_href->{names}    or $log->logcroak('no --names=names_tsv specified on command line!');
 
-    # create database
-    create_db($param_href);
+    # create database if not exists (it doesn't drop it)
+    _create_db_only($param_href);
+
+    # create support tbl to hold information about organisms processed
+    my $import_q = _create_support_tbl($param_href);
 
     # import names file
     my $names_tbl = import_names($param_href);
@@ -2004,8 +2007,21 @@ sub queue_and_run {
     my $organism_href = _collect_input_files($in);
 
     # now run import and analysis for each organism
+  ORGANISM:
     while ( my ( $org_name, $files_href ) = each %{$organism_href} ) {
         $log->warn("Working with $org_name!");
+
+        # check if organism already exists (if yes skip)
+        my $ch        = _get_ch($param_href);
+        my $organisms = $ch->select("SELECT organism FROM $param_href->{database}.support");
+		p $organisms;
+        foreach my $org_aref (@$organisms) {
+			my $organism = $org_aref->[0];
+            if ($organism eq $org_name) {
+				$log->warn("Skip: $organism already in database");
+				next ORGANISM;
+			}
+        }
 
         # import files for each organism
         my $map_tbl = import_map( { %$param_href, map => $files_href->{map} } );
@@ -2022,6 +2038,17 @@ sub queue_and_run {
             }
         );
         my $report_exp_tbl = bl_uniq_expanded( { %$param_href, report_ps_tbl => $report_ps_tbl } );
+
+        # import table names into support table to know if organism proccessed
+        my $ch2      = _get_ch($param_href);
+        my $arg_list = [
+            "$org_name",     "$map_tbl",           "$names_tbl",         "$stats_gen_tbl",
+            "$stats_ps_tbl", "$blastout_uniq_tbl", "$blout_species_tbl", "$report_ps_tbl",
+            "$report_exp_tbl"
+        ];
+        eval { $ch2->do( $import_q, $arg_list ) };
+        $log->error("Error: inserting into {$param_href->{database}.support} failed: $@") if $@;
+        $log->info("Action: {$param_href->{database}.support} inserted successfully for {$org_name}") unless $@;
     }
 
     return;
@@ -2058,30 +2085,30 @@ sub _collect_input_files {
 
     # check for all files (each blastout needs map and stats)
     my %organisms;
-	BLASTOUT:
-	foreach my $blastout (@blastout_files) {
+  BLASTOUT:
+    foreach my $blastout (@blastout_files) {
         my $bl_name = path($blastout)->basename;
-        say $bl_name;
+        #say $bl_name;
         ( my $organism ) = $bl_name =~ m/\A(.+?)\_.+\z/;
-        say $organism;
+        #say $organism;
 
         foreach my $map (@map_files) {
             my $map_name = path($map)->basename;
-            say $map_name;
+            #say $map_name;
             ( my $organism_map ) = $map_name =~ m/\A([^\d].+?)(?:\d+|\_)*.+\z/;
-            say $organism_map;
+            #say $organism_map;
 
             foreach my $stat (@stats_files) {
                 my $stat_name = path($stat)->basename;
-                say $stat_name;
+                #say $stat_name;
                 ( my $organism_stat ) = $stat_name =~ m/\A(.+?)\_.+\z/;
-                say $organism_stat;
+                #say $organism_stat;
 
                 if ( $organism_map eq $organism && $organism_stat eq $organism ) {
 
                     # put files under organism key
                     $organisms{$organism} = { blastout => $blastout, map => $map, stats => $stat };
-					next BLASTOUT;   # if found go to nest blast output
+                    next BLASTOUT;    # if found go to nest blast output
                 }
             }
         }
@@ -2157,6 +2184,76 @@ sub exclude_ti_from_blastout {
     close $blastout_bad_fh;
 
     return;
+}
+
+
+### INTERFACE SUB ###
+# Usage      : _create_db_only($param_href);
+# Purpose    : creates database in ClickHouse (it doesn't drop it)
+# Returns    : nothing
+# Parameters : ( $param_href ) -> params from command line to connect to ClickHouse
+#            : -d (database name)
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   :
+sub _create_db_only {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_create_db_only() needs a hash_ref') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $database     = $param_href->{database} or $log->logcroak('no $database specified on command line!');
+    my $query_create = qq{CREATE DATABASE IF NOT EXISTS $database};
+
+    # create database
+    my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
+    $log->error("Action: creating $database failed!") unless $success_create;
+    $log->info("Action: database {$database} created successfully!") if $success_create;
+
+    return;
+}
+
+
+### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+# Usage      : _create_support_tbl( $param_href );
+# Purpose    : creates support table to hold information about organisms processed
+# Returns    : nothing
+# Parameters :
+# Throws     : croaks if wrong number of parameters
+# Comments   :
+# See Also   :
+sub _create_support_tbl {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_create_support_tbl() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # get new handle
+    my $ch = _get_ch($param_href);
+
+    # create support_tbl
+    my $create_q = qq{
+    CREATE TABLE IF NOT EXISTS support (
+    species_name String,
+    organism String,
+    ti UInt32,
+    map_tbl String,
+    names_tbl String,
+    stats_gen_tbl String,
+    stats_ps_tbl String,
+    blastout_uniq_tbl String,
+    blastout_uniq_species_tbl String,
+    report_ps_tbl String,
+    report_exp_tbl String,
+    date Date  DEFAULT today()
+    )ENGINE=MergeTree (date, (organism), 8192)
+    };
+    _create_table_ch( { table_name => 'support', ch => $ch, query => $create_q, drop => 0, %{$param_href} } );
+
+    # build query to import back to database (needed later)
+    my $import_q
+      = qq{INSERT INTO $param_href->{database}.support (organism, map_tbl, names_tbl, stats_gen_tbl, stats_ps_tbl, blastout_uniq_tbl, blastout_uniq_species_tbl, report_ps_tbl, report_exp_tbl) VALUES};
+    $log->trace("$import_q");
+
+    return $import_q;
 }
 
 
