@@ -1158,6 +1158,46 @@ sub blastout_uniq {
     # get new handle
     my $ch = _get_ch($param_href);
 
+    # PART 1: create blastout_uniq table with prot_id, ti and e_value
+    my $blastout_uniq_tbl = _blastout_uniq_start($param_href);
+
+    # PART 2: ADD phylostrata from map table
+    my $blout_ps_tbl = _blastout_uniq_map($param_href);
+
+    # PART 3: SELECT phylostrata-tax_id from right phylostrata based on analyze
+    my $blout_analyze_tbl = _blastout_uniq_analyze($param_href);
+
+    # PART 4: ADD species_name from names tbl
+    my $blout_species_tbl = _blastout_uniq_species($param_href);
+
+    # PART 5: CALCULATE count() as gene_hits_per_species
+    my $blout_report_tbl = _blastout_uniq_report($param_href);
+
+    # PART 6: DROP EXTRA TABLES AND RENAME REPORT TABLE
+    _drop_table_only_ch( { table_name => $param_href->{blastout_tbl},                ch => $ch, %{$param_href} } );
+    _drop_table_only_ch( { table_name => "$param_href->{blastout_tbl}_uniq_ps",      ch => $ch, %{$param_href} } );
+    _drop_table_only_ch( { table_name => "$param_href->{blastout_tbl}_uniq_analyze", ch => $ch, %{$param_href} } );
+
+    return $blastout_uniq_tbl, $blout_species_tbl, "$param_href->{blastout_tbl}_report_per_species";
+}
+
+
+### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+# Usage      : my $blastout_uniq_tbl = _blastout_uniq_start( $param_href );
+# Purpose    : to create blastout_uniq table with prot_id, ti and e_value
+# Returns    : $blastout_uniq_tbl
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   : 
+sub _blastout_uniq_start {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_blastout_uniq_start() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # get new handle
+    my $ch = _get_ch($param_href);
+
     # get table name
     my $blastout_uniq_tbl = "$param_href->{blastout_tbl}_uniq";
 
@@ -1168,8 +1208,9 @@ sub blastout_uniq {
     my $blastout_uniq_query = qq{
     CREATE TABLE $param_href->{database}.$blastout_uniq_tbl
     ENGINE=MergeTree(date, (prot_id, ti), 8192)
-    AS SELECT DISTINCT prot_id, toUInt32(extract(substring(blast_hit, 28,20), '\\\\d+')) AS ti, date
+    AS SELECT DISTINCT prot_id, toUInt32(extract(substring(blast_hit, 28,20), '\\\\d+')) AS ti, min(e_value) AS e_value,date
     FROM $param_href->{database}.$param_href->{blastout_tbl}
+    GROUP BY prot_id, ti, date
     };
     $log->trace("$blastout_uniq_query");
 
@@ -1180,26 +1221,8 @@ sub blastout_uniq {
     # check number of rows inserted
     my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $blastout_uniq_tbl, %$param_href } );
 
-    # PART 1: ADD phylostrata from map table
-	my $blout_ps_tbl = _blastout_uniq_map( $param_href );
 
-
-    # PART 2: SELECT phylostrata-tax_id from right phylostrata based on analyze
-	my $blout_analyze_tbl = _blastout_uniq_analyze( $param_href );
-
-    # PART 3: ADD species_name from names tbl
-	my $blout_species_tbl = _blastout_uniq_species( $param_href );
-
-    # PART 4: CALCULATE count() as gene_hits_per_species
-	my $blout_report_tbl = _blastout_uniq_report( $param_href );
-
-    # PART 5: DROP EXTRA TABLES AND RENAME REPORT TABLE
-    #_drop_table_only_ch( { table_name => $blastout_uniq_tbl, ch => $ch, %{$param_href} } );
-    _drop_table_only_ch( { table_name => $param_href->{blastout_tbl}, ch => $ch, %{$param_href} } );         # drops imported blast output
-    _drop_table_only_ch( { table_name => "$param_href->{blastout_tbl}_uniq_ps",      ch => $ch, %{$param_href} } );
-    _drop_table_only_ch( { table_name => "$param_href->{blastout_tbl}_uniq_analyze", ch => $ch, %{$param_href} } );
-
-    return $blastout_uniq_tbl, $blout_species_tbl, "$param_href->{blastout_tbl}_report_per_species";
+    return $blastout_uniq_tbl;
 }
 
 
