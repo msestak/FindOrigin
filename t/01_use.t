@@ -21,6 +21,7 @@ my @subs = qw(
   bl_uniq_expanded
   queue_and_run
   exclude_ti_from_blastout
+  import_blastdb
 );
 
 use_ok( $module, @subs);

@@ -21,6 +21,7 @@ use HTTP::Tiny;
 use ClickHouse;
 use PerlIO::gzip;
 use File::Temp qw(tempfile);
+use DateTime::Tiny;
 
 our $VERSION = "0.01";
 
@@ -40,6 +41,7 @@ our @EXPORT_OK = qw{
   bl_uniq_expanded
   queue_and_run
   exclude_ti_from_blastout
+  import_blastdb
 
 };
 
@@ -524,7 +526,7 @@ sub import_blastout {
     my $infile = $param_href->{blastout} or $log->logcroak('no --blastout=filename specified on command line!');
     my $table = path($infile)->basename;
     $table =~ s/\./_/g;    #for files that have dots in name
-    $table =~ s/_gz//g;    #for files that have dots in name
+    $table =~ s/_gz//g;    #for .gz
 
     # drop and recreate table where we are importing
     my $query_drop = qq{DROP TABLE IF EXISTS $param_href->{database}.$table};
@@ -1639,184 +1641,139 @@ sub bl_uniq_expanded {
 ### INTERFACE SUB ###
 # Usage      : --mode=import_blastdb
 # Purpose    : loads BLAST database to ClickHouse database from compressed file using named pipe
-# Returns    : nothing
+# Returns    : $param_href->{blastdb_tbl}
 # Parameters : ( $param_href )
 # Throws     : croaks for parameters
 # Comments   : works on compressed file
 # See Also   : 
 sub import_blastdb {
     my $log = Log::Log4perl::get_logger("main");
-    $log->logcroak( 'import_blastdb() needs a hash_ref' ) unless @_ == 1;
+    $log->logcroak('import_blastdb() needs a hash_ref') unless @_ == 1;
     my ($param_href) = @_;
 
-    my $infile = $param_href->{infile} or $log->logcroak('no $infile specified on command line!');
-    my $table  = path($infile)->basename;
-    $table     =~ s/\./_/g;    #for files that have dots in name
-	my $out    = path($infile)->parent;
+    my $blastdb = $param_href->{blastdb} or $log->logcroak('no $blastdb specified on command line!');
+    my $blastdb_tbl = path($blastdb)->basename;
+    $blastdb_tbl =~ s/\.gz//g;   # for compressed files
+    $blastdb_tbl =~ s/\./_/g;    # for files that have dots in name
+    $param_href->{blastdb_tbl} = $blastdb_tbl;
+    my $out = path($blastdb)->parent;
 
-	# get date for named pipe file naming
-    my $now  = DateTime::Tiny->now;
-    my $date = $now->year . '_' . $now->month . '_' . $now->day . '_' . $now->hour . '_' . $now->minute . '_' . $now->second;
-	
-	# delete pipe if it exists
-	my $load_file = path($out, "blastdb_named_pipe_${date}");   #file for LOAD DATA INFILE
-	if (-p $load_file) {
-		unlink $load_file and $log->trace( "Action: named pipe $load_file removed!" );
-	}
-	#make named pipe
-	mkfifo( $load_file, 0666 ) or $log->logdie( "Error: mkfifo $load_file failed: $!" );
+    # get date for named pipe file naming
+    my $now = DateTime::Tiny->now;
+    my $date
+      = $now->year . '_' . $now->month . '_' . $now->day . '_' . $now->hour . '_' . $now->minute . '_' . $now->second;
 
-	# open blastdb compressed file for reading
-	open my $blastdb_fh, "<:gzip", $infile or $log->logdie( "Can't open gziped file $infile: $!" );
+    # delete pipe if it exists
+    my $load_file = path( $out, "blastdb_named_pipe_${date}" );    #file for LOAD DATA INFILE
+    if ( -p $load_file ) {
+        unlink $load_file and $log->trace("Action: named pipe $load_file removed!");
+    }
 
-	#start 2 processes (one for Perl-child and ClickHouse-parent)
+    #make named pipe
+    mkfifo( $load_file, 0666 ) or $log->logdie("Error: mkfifo $load_file failed: $!");
+
+    # open blastdb compressed file for reading
+    open my $blastdb_fh, "<:gzip", $blastdb or $log->logdie("Error: can't open gziped file $blastdb: $!");
+
+    #start 2 processes (one for Perl-child and ClickHouse-parent)
     my $pid = fork;
 
-	if (!defined $pid) {
-		$log->logdie( "Error: cannot fork: $!" );
-	}
+    if ( !defined $pid ) {
+        $log->logdie("Error: cannot fork: $!");
+    }
 
-	elsif ($pid == 0) {
-		# Child-client process
-		$log->warn( "Action: Perl-child-client starting..." );
+    elsif ( $pid == 0 ) {
 
-		# open named pipe for writing (gziped file --> named pipe)
-		open my $blastdb_pipe_fh, "+<:encoding(ASCII)", $load_file or die $!;   #+< mode=read and write
-		
-		# define new block for reading blocks of fasta
-		{
-			local $/ = ">pgi";  #look in larger chunks between >gi (solo > found in header so can't use)
-			local $.;           #gzip count
-			my $out_cnt = 0;    #named pipe count
+        # Child-client process
+        $log->warn("Action: Perl-child-client starting...");
 
-			# print to named pipe
-			PIPE:
-			while (<$blastdb_fh>) {
-				chomp;
-				#print $blastdb_pipe_fh "$_";
-				#say '{', $_, '}';
-				next PIPE if $_ eq '';   #first iteration is empty?
-				
-				# extract pgi, prot_name and fasta + fasta
-				my ($prot_id, $prot_name, $fasta) = $_ =~ m{\A([^\t]+)\t([^\n]+)\n(.+)\z}smx;
+        # open named pipe for writing (gziped file --> named pipe)
+        open my $blastdb_pipe_fh, "+<:encoding(ASCII)", $load_file or die $!;    #+< mode=read and write
 
-				#pgi removed as record separator (return it back)
-				$prot_id = 'pgi' . $prot_id;
-		        my ($pgi, $ti) = $prot_id =~ m{pgi\|(\d+)\|ti\|(\d+)\|pi\|(?:\d+)\|};
+        # define new block for reading blocks of fasta
+        {
+            local $/ = ">pgi";    #look in larger chunks between >gi (solo > found in header so can't use)
+            local $.;             #gzip count
+            my $out_cnt = 0;      #named pipe count
 
-				# remove illegal chars from fasta and upercase it
-			    $fasta =~ s/\R//g;      #delete multiple newlines (all vertical and horizontal space)
-				$fasta = uc $fasta;     #uppercase fasta
-			    $fasta =~ tr{A-Z}{}dc;  #delete all special characters (all not in A-Z)
+            # print to named pipe
+          PIPE:
+            while (<$blastdb_fh>) {
+                chomp;
 
-				# print to pipe
-				print {$blastdb_pipe_fh} "$prot_id\t$pgi\t$ti\t$prot_name\t$fasta\n";
-				$out_cnt++;
+                #print $blastdb_pipe_fh "$_";
+                #say '{', $_, '}';
+                next PIPE if $_ eq '';    #first iteration is empty?
 
-				#progress tracker for blastdb file
-				if ($. % 1000000 == 0) {
-					$log->trace( "$. lines processed!" );
-				}
-			}
-			my $blastdb_file_line_cnt = $. - 1;   #first line read empty (don't know why)
-			$log->warn( "Report: file $infile has $blastdb_file_line_cnt fasta records!" );
-			$log->warn( "Action: file $load_file written with $out_cnt lines/fasta records!" );
-		}   #END block writing to pipe
+                # extract pgi, prot_name and fasta + fasta
+                my ( $prot_id, $prot_name, $fasta ) = $_ =~ m{\A([^\t]+)\t([^\n]+)\n(.+)\z}smx;
 
-		$log->warn( "Action: Perl-child-client terminating :)" );
-		exit 0;
-	}
-	else {
-		# ClickHouse-parent process
-		$log->warn( "Action: ClickHouse-parent process, waiting for child..." );
-		
-		# SECOND PART: loading named pipe into db
-		my $database = $param_href->{database}    or $log->logcroak( 'no $database specified on command line!' );
-		
-		# get new handle
-    	my $dbh = _http_exec_query($param_href);
+                #pgi removed as record separator (return it back)
+                $prot_id = 'pgi' . $prot_id;
+                my ( $pgi, $ti ) = $prot_id =~ m{pgi\|(\d+)\|ti\|(\d+)\|pi\|(?:\d+)\|};
 
-    	# create a table to load into
-    	my $create_query = sprintf( qq{
-    	CREATE TABLE %s (
-    	prot_id VARCHAR(40) NOT NULL,
-        pgi CHAR(19) NOT NULL,
-		ti INT UNSIGNED NOT NULL,
-    	prot_name VARCHAR(200) NOT NULL,
-    	fasta MEDIUMTEXT NOT NULL,
-    	PRIMARY KEY(pgi)
-    	)}, $dbh->quote_identifier($table) );
-		_create_table( { table_name => $table, dbh => $dbh, query => $create_query, %{$param_href} } );
-		$log->trace("Report: $create_query");
+                # remove illegal chars from fasta and upercase it
+                $fasta =~ s/\R//g;        #delete multiple newlines (all vertical and horizontal space)
+                $fasta = uc $fasta;       #uppercase fasta
+                $fasta =~ tr{A-Z}{}dc;    #delete all special characters (all not in A-Z)
 
-		#import table
-    	my $load_query = qq{
-    	LOAD DATA INFILE '$load_file'
-    	INTO TABLE $table } . q{ FIELDS TERMINATED BY '\t'
-    	LINES TERMINATED BY '\n'
-    	};
-    	eval { $dbh->do( $load_query, { async => 1 } ) };
+                # print to pipe
+                print {$blastdb_pipe_fh} "$prot_id\t$pgi\t$ti\t$prot_name\t$fasta\n";
+                $out_cnt++;
 
-    	#check status while running LOAD DATA INFILE
-    	{    
-    	    my $dbh_check         = _http_exec_query($param_href);
-    	    until ( $dbh->mysql_async_ready ) {
-				my $processlist_query = qq{
-					SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-					WHERE DB = ? AND INFO LIKE 'LOAD DATA INFILE%';
-					};
-    	        my $sth = $dbh_check->prepare($processlist_query);
-    	        $sth->execute($database);
-    	        my ( $time, $state );
-    	        $sth->bind_columns( \( $time, $state ) );
-    	        while ( $sth->fetchrow_arrayref ) {
-    	            my $process = sprintf( "Time running:%d sec\tSTATE:%s\n", $time, $state );
-    	            $log->trace( $process );
-    	            sleep 10;
-    	        }
-    	    }
-    	}    #end check LOAD DATA INFILE
-    	my $rows = $dbh->mysql_async_result;
-    	$log->info( "Report: import inserted $rows rows!" );
-    	$log->error( "Report: loading $table failed: $@" ) if $@;
+                #progress tracker for blastdb file
+                if ( $. % 1000000 == 0 ) {
+                    $log->trace("$. lines processed!");
+                }
+            }
+            my $blastdb_file_line_cnt = $. - 1;    #first line read empty (don't know why)
+            $log->warn("Report: file $blastdb has $blastdb_file_line_cnt fasta records!");
+            $log->warn("Action: file $load_file written with $out_cnt lines/fasta records!");
+        }    #END block writing to pipe
 
-		# add index
-	    my $alter_query = qq{
-	    ALTER TABLE $table ADD INDEX tix(ti)
-	    };
-	    eval { $dbh->do( $alter_query, { async => 1 } ) };
-	
-	    # check status while running
-	    my $dbh_check2            = _http_exec_query($param_href);
-	    until ( $dbh->mysql_async_ready ) {
-	        my $processlist_query = qq{
-	        SELECT TIME, STATE FROM INFORMATION_SCHEMA.PROCESSLIST
-	        WHERE DB = ? AND INFO LIKE 'ALTER%';
-	        };
-	        my ( $time, $state );
-	        my $sth = $dbh_check2->prepare($processlist_query);
-	        $sth->execute($param_href->{database});
-	        $sth->bind_columns( \( $time, $state ) );
-	        while ( $sth->fetchrow_arrayref ) {
-	            my $print = sprintf( "Time running:%d sec\tSTATE:%s\n", $time, $state );
-	            $log->trace( $print );
-	            sleep 10;
-	        }
-	    }
-	
-	    #report success or failure
-	    $log->error( "Error: adding index tix on $table failed: $@" ) if $@;
-	    $log->info( "Action: Index tix on $table added successfully!" ) unless $@;
+        $log->warn("Action: Perl-child-client terminating :)");
+        exit 0;
+    }
+    else {
+        # ClickHouse-parent process
+        $log->warn("Action: ClickHouse-parent process, waiting for child...");
 
-		$dbh->disconnect;
+        # SECOND PART: loading named pipe into db
+        my $database = $param_href->{database} or $log->logcroak('no $database specified on command line!');
 
-		# communicate with child process
-		waitpid $pid, 0;
-	}
-	$log->warn( "ClickHouse-parent process end after child has finished" );
-		unlink $load_file and $log->warn( "Action: named pipe $load_file removed!" );
+        # get new handle
+        my $ch = _get_ch($param_href);
 
-	return;
+        # create blastdb table
+        my $create_blastdb_q = qq{
+        CREATE TABLE $blastdb_tbl (
+        prot_id String,
+        pgi String,
+        ti UInt32,
+        prot_name String,
+        fasta String,
+        date Date  DEFAULT today() )
+        ENGINE=MergeTree (date, (ti, pgi, prot_name), 8192) };
+
+        _create_table_ch( { table_name => $blastdb_tbl, ch => $ch, query => $create_blastdb_q, %$param_href } );
+        $log->trace("Report: $create_blastdb_q");
+
+        # import into table (in ClickHouse) from named pipe
+        my $import_query
+          = qq{INSERT INTO $param_href->{database}.$blastdb_tbl (prot_id, pgi, ti, prot_name, fasta) FORMAT TabSeparated};
+        my $import_cmd = qq{ < $load_file | clickhouse-client --query "$import_query"};
+        _import_into_table_ch( { import_cmd => $import_cmd, table_name => $blastdb_tbl, %$param_href } );
+
+        # check number of rows inserted
+        my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $blastdb_tbl, %$param_href } );
+
+        # communicate with child process
+        waitpid $pid, 0;
+    }
+    $log->warn("ClickHouse-parent process end after child has finished");
+    unlink $load_file and $log->warn("Action: named pipe $load_file removed!");
+
+    return $param_href->{blastdb_tbl};
 }
 
 
@@ -2315,7 +2272,7 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
     # import full BLAST database (plus ti and pgi columns)
-    FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
+    FindOrigin.pm --mode=import_blastdb --blastdb t/data/db90_head.gz -d dbfull -v -v
 
     # run import and analysis for all blast output files
     FindOrigin.pm --mode=queue_and_run -d kam --in=/msestak/blastout/ --names t/data/names.dmp.fmt.new.gz -v -v
@@ -2425,21 +2382,10 @@ Removes specific hits from the BLAST output based on the specified tax_id (exclu
 
 =item import_blastdb
 
- # options from command line
- FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -p msandbox -u msandbox -po 8123
-
  # options from config
- FindOrigin.pm --mode=import_blastdb -if t/data/db90_head.gz -d hs_blastout -v -v
+ FindOrigin.pm --mode=import_blastdb --blastdb t/data/db90_head.gz -d dbfull -v -v
 
-Imports BLAST database file into ClickHouse (it has 2 extra columns = ti and pgi). It needs ClickHouse connection parameters to connect to ClickHouse.
-
- ... Load (41 min)
- [2016/04/22 00:41:42,563]TRACE> FindOrigin::import_blastdb line:1815==>Time running:2460 sec       STATE:Verifying index uniqueness: Checked 43450000 of 0 rows in key-PR
- [2016/04/22 00:41:52,564] INFO> FindOrigin::import_blastdb line:1821==>Report: import inserted 43899817 rows!
- [2016/04/22 00:41:52,567]TRACE> FindOrigin::import_blastdb line:1843==>Time running:0 sec  STATE:Adding indexes
- ... Indexing (2 min)
- [2016/04/22 00:43:52,588] INFO> FindOrigin::import_blastdb line:1850==>Action: Index tix on db90_gz added successfully!
- [2016/04/22 00:43:52,590] INFO> FindOrigin::run line:109==>TIME when finished for: import_blastdb
+Imports BLAST database file into ClickHouse (it splits prot_id into 2 extra columns = ti and pgi). It needs ClickHouse connection parameters to connect to ClickHouse.
 
 =item queue_and_run
 
