@@ -134,6 +134,8 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 
         # options from config
         FindOrigin.pm --mode=import_blastdb --blastdb t/data/db90_head.gz -d dbfull -v -v
+        # runs in 2 h for 113,834,350 fasta records
+        FindOrigin.pm --mode=import_blastdb -d blastdb --blastdb /msestak/dbfull/dbfull.gz -v -v
 
     Imports BLAST database file into ClickHouse (it splits prot\_id into 2 extra columns = ti and pgi). It needs ClickHouse connection parameters to connect to ClickHouse.
 

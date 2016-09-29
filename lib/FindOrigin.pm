@@ -534,6 +534,10 @@ sub import_blastout {
     $log->error("Error: dropping $table failed!") unless $success_drop;
     $log->debug("Action: table $table dropped successfully!") if $success_drop;
 
+    # wait a sec so it has time to execute
+    sleep 1;
+
+    # create table
     my $columns
       = q{(prot_id String, blast_hit String, perc_id Float32, alignment_length UInt32, mismatches UInt32, gap_openings UInt32, query_start UInt32, query_end UInt32, subject_start UInt32, subject_end UInt32, e_value Float64, bitscore Float32, date Date DEFAULT today())};
     my $engine       = q{ENGINE=MergeTree(date, prot_id, 8192)};
@@ -541,6 +545,9 @@ sub import_blastout {
     my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
     $log->error("Error: creating $table failed!") unless $success_create;
     $log->debug("Action: table $table created successfully!") if $success_create;
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # import into table (in ClickHouse) from gziped file (needs pigz)
     my $import_query
@@ -551,13 +558,16 @@ sub import_blastout {
         $log->debug("Action: import to $param_href->{database}.$table success!");
     }
     else {
-        $log->error("Error: $import_cmd failed: $stderr");
+        $log->logdie("Error: $import_cmd failed: $stderr");
     }
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # check number of rows inserted
     my $query_cnt = qq{SELECT count() FROM $param_href->{database}.$table};
     my ( $success_cnt, $res_cnt ) = _http_exec_query( { query => $query_cnt, %$param_href } );
-	$res_cnt =~ s/\n//g;   # remove trailing newline
+    $res_cnt =~ s/\n//g;    # remove trailing newline
     $log->debug("Error: counting rows in $table failed!") unless $success_cnt;
     $log->info("Action: inserted $res_cnt rows into {$table}") if $success_cnt;
 
@@ -645,39 +655,73 @@ sub import_map {
     # explicit close needed else it can break
     close $tmp_fh;
 
-    # drop and recreate table where we are importing
-    my $query_drop = qq{DROP TABLE IF EXISTS $param_href->{database}.$map_tbl};
-    my ( $success_drop, $res_drop ) = _http_exec_query( { query => $query_drop, %$param_href } );
-    $log->error("Error: dropping $map_tbl failed!") unless $success_drop;
-    $log->debug("Action: table $map_tbl dropped successfully!") if $success_drop;
+    my $map_block_cnt = 0;
+  MAP: {
+        # drop and recreate table where we are importing
+        my $query_drop = qq{DROP TABLE IF EXISTS $param_href->{database}.$map_tbl};
+        my ( $success_drop, $res_drop ) = _http_exec_query( { query => $query_drop, %$param_href } );
+        $log->debug("Action: table {$map_tbl} dropped successfully!") if $success_drop;
+        if ( !$success_drop ) {
+            $log->error("Error: dropping {$map_tbl} failed!");
+            $map_block_cnt++;
+            $log->logdie("Error: tried to drop {$map_tbl} 5 times with no success") if ( $map_block_cnt > 5 );
+            redo MAP;
+        }
 
-    my $columns      = q{(prot_id String, ps UInt8, ti UInt32, psname String, date Date DEFAULT today())};
-    my $engine       = q{ENGINE=MergeTree(date, prot_id, 8192)};
-    my $query_create = qq{CREATE TABLE IF NOT EXISTS  $param_href->{database}.$map_tbl $columns $engine};
-    my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
-    $log->error("Error: creating $map_tbl failed!") unless $success_create;
-    $log->debug("Action: table $map_tbl created successfully!") if $success_create;
+        # wait a sec so it has time to execute
+        sleep 1;
 
-    # import into $map_tbl
-    my $import_query = qq{INSERT INTO $param_href->{database}.$map_tbl (prot_id, ps, ti, psname) FORMAT TabSeparated};
-    my $import_cmd   = qq{ cat $temp_map | clickhouse-client --query "$import_query"};
-    my ( $stdout, $stderr, $exit ) = _capture_output( $import_cmd, $param_href );
-    if ( $exit == 0 ) {
-        $log->debug("Action: import to $param_href->{database}.$map_tbl success!");
-    }
-    else {
-        $log->error("Error: $import_cmd failed: $stderr");
-    }
+        # create table
+        my $columns      = q{(prot_id String, ps UInt8, ti UInt32, psname String, date Date DEFAULT today())};
+        my $engine       = q{ENGINE=MergeTree(date, prot_id, 8192)};
+        my $query_create = qq{CREATE TABLE IF NOT EXISTS  $param_href->{database}.$map_tbl $columns $engine};
+        my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
+        $log->debug("Action: table $map_tbl created successfully!") if $success_create;
+        if ( !$success_create ) {
+            $log->error("Error: creating {$map_tbl} failed!");
+            $map_block_cnt++;
+            $log->logdie("Error: tried to create {$map_tbl} 5 times with no success") if ( $map_block_cnt > 5 );
+            redo MAP;
+        }
 
-    # check number of rows inserted
-    my $query_cnt = qq{SELECT count() FROM $param_href->{database}.$map_tbl};
-    my ( $success_cnt, $res_cnt ) = _http_exec_query( { query => $query_cnt, %$param_href } );
-    $res_cnt =~ s/\n//g;    # remove trailing newline
-    $log->debug("Error: counting rows for $map_tbl failed!") unless $success_cnt;
-    $log->info("Action: inserted $res_cnt rows into {$map_tbl}") if $success_cnt;
+        # wait a sec so it has time to execute
+        sleep 5;
+
+        # import into $map_tbl
+        my $import_query
+          = qq{INSERT INTO $param_href->{database}.$map_tbl (prot_id, ps, ti, psname) FORMAT TabSeparated};
+        my $import_cmd = qq{ cat $temp_map | clickhouse-client --stacktrace --query "$import_query"};
+        my ( $stdout, $stderr, $exit ) = _capture_output( $import_cmd, $param_href );
+        if ( $exit == 0 ) {
+            $log->debug("Action: import to $param_href->{database}.$map_tbl success!");
+        }
+        else {
+            $log->error("Error: {$import_cmd} failed: $stderr");
+            $map_block_cnt++;
+            $log->logdie("Error: tried to import to {$map_tbl} 5 times with no success") if ( $map_block_cnt > 5 );
+            redo MAP;
+        }
+
+        # wait a sec so it has time to execute
+        sleep 1;
+
+        # check number of rows inserted
+        my $query_cnt = qq{SELECT count() FROM $param_href->{database}.$map_tbl};
+        my ( $success_cnt, $res_cnt ) = _http_exec_query( { query => $query_cnt, %$param_href } );
+        $res_cnt =~ s/\n//g;    # remove trailing newline
+        $log->info("Action: inserted $res_cnt rows into {$map_tbl}") if $success_cnt;
+        $log->debug("Error: counting rows for $map_tbl failed!") unless $success_cnt;
+        if ( !$success_cnt ) {
+            $log->error("Error: counting rows for {$map_tbl} failed!");
+            $map_block_cnt++;
+            $log->logdie("Error: tried to count rows for {$map_tbl} 5 times with no success") if ( $map_block_cnt > 5 );
+            redo MAP;
+        }
+
+    }    # end MAP block
 
     # unlink tmp map file
-    unlink $temp_map and $log->warn("Action: $temp_map unlinked");
+    #unlink $temp_map and $log->warn("Action: $temp_map unlinked");
 
     return $map_tbl;
 }
@@ -722,12 +766,19 @@ sub import_blastdb_stats {
     $log->error("Error: dropping $stats_ps_tbl failed!") unless $success_drop;
     $log->debug("Action: table $stats_ps_tbl dropped successfully!") if $success_drop;
 
+    # wait a sec so it has time to execute
+    sleep 1;
+
+    # create table
     my $columns      = q{(ps UInt8,num_of_genomes UInt32, ti UInt32, date Date DEFAULT today())};
     my $engine       = q{ENGINE=MergeTree(date, (ps, ti), 8192)};
     my $query_create = qq{CREATE TABLE IF NOT EXISTS  $param_href->{database}.$stats_ps_tbl $columns $engine};
     my ( $success_create, $res_create ) = _http_exec_query( { query => $query_create, %$param_href } );
     $log->error("Error: creating $stats_ps_tbl failed!") unless $success_create;
     $log->debug("Action: table $stats_ps_tbl created successfully!") if $success_create;
+
+    # wait a sec so it has time to execute
+    sleep 5;
 
     # import into $stats_ps_tbl
     my $import_query_ps
@@ -740,6 +791,9 @@ sub import_blastdb_stats {
     else {
         $log->error("Error: $import_cmd_ps failed: $stderr_ps");
     }
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # check number of rows inserted
     my $query_cnt_ps = qq{SELECT count() FROM $param_href->{database}.$stats_ps_tbl};
@@ -754,11 +808,18 @@ sub import_blastdb_stats {
     $log->error("Error: dropping ${stats_ps_tbl}2 failed!") unless $success_drop2;
     $log->debug("Action: table ${stats_ps_tbl}2 dropped successfully!") if $success_drop2;
 
+    # wait a sec so it has time to execute
+    sleep 1;
+
+    # create table
     my $query_create2
       = qq{CREATE TABLE $param_href->{database}.${stats_ps_tbl}2 ENGINE=MergeTree (date, ps, 8192) AS SELECT DISTINCT ps, sum(num_of_genomes) AS num_of_genomes, ti, date FROM $param_href->{database}.$stats_ps_tbl GROUP BY ps, ti, date ORDER BY ps};
     my ( $success_create2, $res_create2 ) = _http_exec_query( { query => $query_create2, %$param_href } );
     $log->error("Error: creating ${stats_ps_tbl}2 failed!") unless $success_create2;
     $log->debug("Action: table ${stats_ps_tbl}2 created successfully!") if $success_create2;
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # check number of rows inserted (now in aggregated table)
     my $query_cnt_ps2 = qq{SELECT count() FROM $param_href->{database}.${stats_ps_tbl}2};
@@ -772,6 +833,9 @@ sub import_blastdb_stats {
     my ( $success_drop_again, $res_drop_again ) = _http_exec_query( { query => $query_drop, %$param_href } );
     $log->error("Error: dropping $stats_ps_tbl failed!") unless $success_drop_again;
     $log->debug("Action: table $stats_ps_tbl dropped successfully!") if $success_drop_again;
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # rename stats2 table to this table
     my $query_rename_stats = qq{RENAME TABLE $param_href->{database}.${stats_ps_tbl}2 TO $param_href->{database}.$stats_ps_tbl};
@@ -787,6 +851,10 @@ sub import_blastdb_stats {
     $log->error("Error: dropping $stats_genomes_tbl failed!") unless $success_drop_gen;
     $log->debug("Action: table $stats_genomes_tbl dropped successfully!") if $success_drop_gen;
 
+    # wait a sec so it has time to execute
+    sleep 1;
+
+    # create table
     my $columns_gen = q{(ps UInt8, psti UInt32, num_of_genes UInt32, ti UInt32, date Date DEFAULT today())};
     my $engine_gen  = q{ENGINE=MergeTree(date, (ps, ti), 8192)};
     my $query_create_gen
@@ -794,6 +862,9 @@ sub import_blastdb_stats {
     my ( $success_create_gen, $res_create_gen ) = _http_exec_query( { query => $query_create_gen, %$param_href } );
     $log->error("Error: creating $stats_genomes_tbl failed!") unless $success_create_gen;
     $log->debug("Action: table $stats_genomes_tbl created successfully!") if $success_create_gen;
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # import into $stats_genomes_tbl
     my $import_query_gen
@@ -806,6 +877,9 @@ sub import_blastdb_stats {
     else {
         $log->error("Error: $import_cmd_gen failed: $stderr_ps");
     }
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # check number of rows inserted
     my $query_cnt_gen = qq{SELECT count() FROM $param_href->{database}.$stats_genomes_tbl};
@@ -1206,6 +1280,9 @@ sub _blastout_uniq_start {
     # drop table if it exists
     _drop_table_only_ch( { table_name => $blastout_uniq_tbl, ch => $ch, %{$param_href} } );
 
+    # wait a sec so it has time to execute
+    sleep 1;
+
     # create blastout_uniq table ('\\\\d+' is '\\d+' in ClickHouse)
     my $blastout_uniq_query = qq{
     CREATE TABLE $param_href->{database}.$blastout_uniq_tbl
@@ -1217,12 +1294,14 @@ sub _blastout_uniq_start {
     $log->trace("$blastout_uniq_query");
 
     eval { $ch->do($blastout_uniq_query) };
-    $log->error("Error: creating {$param_href->{database}.$blastout_uniq_tbl} failed: $@") if $@;
+    $log->logdie("Error: creating {$param_href->{database}.$blastout_uniq_tbl} failed: $@") if $@;
     $log->info("Action: {$param_href->{database}.$blastout_uniq_tbl} created successfully") unless $@;
+
+    # wait a sec so it has time to execute
+    sleep 1;
 
     # check number of rows inserted
     my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $blastout_uniq_tbl, %$param_href } );
-
 
     return $blastout_uniq_tbl;
 }
@@ -1761,7 +1840,7 @@ sub import_blastdb {
         # import into table (in ClickHouse) from named pipe
         my $import_query
           = qq{INSERT INTO $param_href->{database}.$blastdb_tbl (prot_id, pgi, ti, prot_name, fasta) FORMAT TabSeparated};
-        my $import_cmd = qq{ < $load_file | clickhouse-client --query "$import_query"};
+        my $import_cmd = qq{ cat $load_file | clickhouse-client --query "$import_query"};
         _import_into_table_ch( { import_cmd => $import_cmd, table_name => $blastdb_tbl, %$param_href } );
 
         # check number of rows inserted
@@ -2384,6 +2463,8 @@ Removes specific hits from the BLAST output based on the specified tax_id (exclu
 
  # options from config
  FindOrigin.pm --mode=import_blastdb --blastdb t/data/db90_head.gz -d dbfull -v -v
+ # runs in 2 h for 113,834,350 fasta records
+ FindOrigin.pm --mode=import_blastdb -d blastdb --blastdb /msestak/dbfull/dbfull.gz -v -v
 
 Imports BLAST database file into ClickHouse (it splits prot_id into 2 extra columns = ti and pgi). It needs ClickHouse connection parameters to connect to ClickHouse.
 
