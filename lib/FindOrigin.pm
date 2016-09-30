@@ -2067,19 +2067,21 @@ sub queue_and_run {
 
     # now run import and analysis for each organism
   ORGANISM:
-    while ( my ( $org_name, $files_href ) = each %{$organism_href} ) {
+    foreach my $org_name ( sort keys %{$organism_href} ) {
+        #while ( my ( $org_name, $files_href ) = each %{$organism_href} ) {
         $log->warn("Working with $org_name!");
+        my $files_href = $organism_href->{$org_name};
 
         # check if organism already exists (if yes skip)
         my $ch        = _get_ch($param_href);
         my $organisms = $ch->select("SELECT organism FROM $param_href->{database}.support");
-		p $organisms;
+        p $organisms;
         foreach my $org_aref (@$organisms) {
-			my $organism = $org_aref->[0];
-            if ($organism eq $org_name) {
-				$log->warn("Skip: $organism already in database");
-				next ORGANISM;
-			}
+            my $organism = $org_aref->[0];
+            if ( $organism eq $org_name ) {
+                $log->warn("Skip: $organism already in database");
+                next ORGANISM;
+            }
         }
 
         # import files for each organism
