@@ -1627,6 +1627,7 @@ sub bl_uniq_expanded {
 
         # get unique count per tax_id
         my @arg_list;
+        my $arg_to_insert_cnt = 0;
         foreach my $ti (@ti) {
             my @ti_genelist = @{ $ti_genelist_h{$ti} };
             my ( $ti_unique,     $ti2,  $ti3,  $ti4,  $ti5,  $ti6,  $ti7,  $ti8,  $ti9,  $ti10 )  = (0) x 11;
@@ -1656,18 +1657,36 @@ sub bl_uniq_expanded {
               [ $ti, $ti_unique, $ti2, $ti3, $ti4, $ti5, $ti6, $ti7, $ti8, $ti9, $ti10,
                 $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g
               ];
+            $arg_to_insert_cnt++;
+
+            # insert in small chunks (else Perl memory grows)
+            if ( $arg_to_insert_cnt >= 1000 ) {
+                my $ch2 = _get_ch($param_href);
+
+                eval { $ch2->do( $import_query, @arg_list ) };
+                $log->error("Error: inserting into {$param_href->{database}.$report_ps_tbl_exp} failed: $@")
+                  if $@;
+                $log->trace(
+                    "Action: {$param_href->{database}.$report_ps_tbl_exp} inserted successfully with {$arg_to_insert_cnt} records"
+                ) unless $@;
+
+                # back to empty for another chunk
+                $arg_to_insert_cnt = 0;
+                @arg_list          = ();
+            }
+
             #say "TI:$ti\tuniq:$ti_unique\tti2:$ti2\tti3:$ti3\tti4:$ti4\tti5:$ti5\tti6:$ti6\tti7:$ti7\tti8:$ti8\tti9:$ti9\tti10:$ti10";
             #say  "TI:$ti\tuniq:$ti_uniq_genes\tti2:$ti2g\tti3:$ti3g\tti4:$ti4g\tti5:$ti5g\tti6:$ti6g\tti7:$ti7g\tti8:$ti8g\tti9:$ti9g\tti10:$ti10g";
         }
 
-        # import calculated values into table
+        # import all remaining calculated values into table
         # get new handle
-        my $ch2 = _get_ch($param_href);
+        my $ch3 = _get_ch($param_href);
 
-        eval { $ch2->do( $import_query, @arg_list ) };
+        eval { $ch3->do( $import_query, @arg_list ) };
         $log->error("Error: inserting into {$param_href->{database}.$report_ps_tbl_exp} failed: $@")
           if $@;
-        $log->info("Action: {$param_href->{database}.$report_ps_tbl_exp} inserted successfully")
+        $log->trace("Action: {$param_href->{database}.$report_ps_tbl_exp} inserted successfully with {$arg_to_insert_cnt} records")
           unless $@;
 
         $log->debug("Report: inserted ps $ps");
@@ -2100,7 +2119,7 @@ sub queue_and_run {
         );
         my $report_exp_tbl = bl_uniq_expanded( { %$param_href, report_ps_tbl => $report_ps_tbl } );
 
-        # import table names into support table to know if organism proccessed
+        # import table names into support table to know if organism processed
         my $ch2      = _get_ch($param_href);
         my $arg_list = [
             "$org_name",     "$map_tbl",           "$names_tbl",         "$stats_gen_tbl",
@@ -2313,6 +2332,9 @@ sub _create_support_tbl {
     my $import_q
       = qq{INSERT INTO $param_href->{database}.support (organism, map_tbl, names_tbl, stats_gen_tbl, stats_ps_tbl, blastout_uniq_tbl, blastout_uniq_species_tbl, report_ps_tbl, report_exp_tbl) VALUES};
     $log->trace("$import_q");
+
+    # example
+    # INSERT INTO kam.support (organism, map_tbl, names_tbl, stats_gen_tbl, stats_ps_tbl, blastout_uniq_tbl, blastout_uniq_species_tbl, report_ps_tbl, report_exp_tbl) VALUES ('an', 'an3_map', 'names_dmp_fmt_new', 'an_28377_analyze_stats_genomes', 'an_28377_analyze_stats_ps', 'an_fulldb_plus_22_03_2016_good_uniq', 'an_fulldb_plus_22_03_2016_good_uniq_species', 'an_fulldb_plus_22_03_2016_good_report_per_species', 'an_fulldb_plus_22_03_2016_good_report_per_species_expanded');
 
     return $import_q;
 }
