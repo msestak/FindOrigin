@@ -2087,6 +2087,7 @@ sub queue_and_run {
     # now run import and analysis for each organism
   ORGANISM:
     foreach my $org_name ( sort keys %{$organism_href} ) {
+
         #while ( my ( $org_name, $files_href ) = each %{$organism_href} ) {
         $log->warn("Working with $org_name!");
         my $files_href = $organism_href->{$org_name};
@@ -2122,9 +2123,9 @@ sub queue_and_run {
         # import table names into support table to know if organism processed
         my $ch2      = _get_ch($param_href);
         my $arg_list = [
-            "$org_name",     "$map_tbl",           "$names_tbl",         "$stats_gen_tbl",
-            "$stats_ps_tbl", "$blastout_uniq_tbl", "$blout_species_tbl", "$report_ps_tbl",
-            "$report_exp_tbl"
+            "$org_name",      "$files_href->{ti}", "$map_tbl",           "$names_tbl",
+            "$stats_gen_tbl", "$stats_ps_tbl",     "$blastout_uniq_tbl", "$blout_species_tbl",
+            "$report_ps_tbl", "$report_exp_tbl"
         ];
         eval { $ch2->do( $import_q, $arg_list ) };
         $log->error("Error: inserting into {$param_href->{database}.support} failed: $@") if $@;
@@ -2168,26 +2169,26 @@ sub _collect_input_files {
   BLASTOUT:
     foreach my $blastout (@blastout_files) {
         my $bl_name = path($blastout)->basename;
-        #say $bl_name;
+        #say "BL_NAME:$bl_name";
         ( my $organism ) = $bl_name =~ m/\A(.+?)\_.+\z/;
-        #say $organism;
+        #say "ORG:$organism";
 
         foreach my $map (@map_files) {
             my $map_name = path($map)->basename;
-            #say $map_name;
-            ( my $organism_map ) = $map_name =~ m/\A([^\d].+?)(?:\d+|\_)*.+\z/;
-            #say $organism_map;
+            #say "MAP_NAME:$map_name";
+            ( my $organism_map ) = $map_name =~ m/\A([^\d]+)(?:\d+|\_)*.+\z/;
+            #say "ORG_MAP:$organism_map";
 
             foreach my $stat (@stats_files) {
                 my $stat_name = path($stat)->basename;
-                #say $stat_name;
-                ( my $organism_stat ) = $stat_name =~ m/\A(.+?)\_.+\z/;
-                #say $organism_stat;
+                #say "STAT_NAME:$stat_name";
+                my ( $organism_stat, $org_ti ) = $stat_name =~ m/\A(.+?)\_(\d+).+\z/;
+                #say "ORG_stat:$organism_stat";
 
                 if ( $organism_map eq $organism && $organism_stat eq $organism ) {
 
                     # put files under organism key
-                    $organisms{$organism} = { blastout => $blastout, map => $map, stats => $stat };
+                    $organisms{$organism} = { blastout => $blastout, map => $map, stats => $stat, ti => $org_ti };
                     next BLASTOUT;    # if found go to nest blast output
                 }
             }
@@ -2330,11 +2331,11 @@ sub _create_support_tbl {
 
     # build query to import back to database (needed later)
     my $import_q
-      = qq{INSERT INTO $param_href->{database}.support (organism, map_tbl, names_tbl, stats_gen_tbl, stats_ps_tbl, blastout_uniq_tbl, blastout_uniq_species_tbl, report_ps_tbl, report_exp_tbl) VALUES};
+      = qq{INSERT INTO $param_href->{database}.support (organism, ti, map_tbl, names_tbl, stats_gen_tbl, stats_ps_tbl, blastout_uniq_tbl, blastout_uniq_species_tbl, report_ps_tbl, report_exp_tbl) VALUES};
     $log->trace("$import_q");
 
     # example
-    # INSERT INTO kam.support (organism, map_tbl, names_tbl, stats_gen_tbl, stats_ps_tbl, blastout_uniq_tbl, blastout_uniq_species_tbl, report_ps_tbl, report_exp_tbl) VALUES ('an', 'an3_map', 'names_dmp_fmt_new', 'an_28377_analyze_stats_genomes', 'an_28377_analyze_stats_ps', 'an_fulldb_plus_22_03_2016_good_uniq', 'an_fulldb_plus_22_03_2016_good_uniq_species', 'an_fulldb_plus_22_03_2016_good_report_per_species', 'an_fulldb_plus_22_03_2016_good_report_per_species_expanded');
+    # INSERT INTO kam.support (organism, ti, map_tbl, names_tbl, stats_gen_tbl, stats_ps_tbl, blastout_uniq_tbl, blastout_uniq_species_tbl, report_ps_tbl, report_exp_tbl) VALUES ('an', '111111', 'an3_map', 'names_dmp_fmt_new', 'an_28377_analyze_stats_genomes', 'an_28377_analyze_stats_ps', 'an_fulldb_plus_22_03_2016_good_uniq', 'an_fulldb_plus_22_03_2016_good_uniq_species', 'an_fulldb_plus_22_03_2016_good_report_per_species', 'an_fulldb_plus_22_03_2016_good_report_per_species_expanded');
 
     return $import_q;
 }
