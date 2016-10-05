@@ -23,6 +23,7 @@ my @subs = qw(
   exclude_ti_from_blastout
   import_blastdb
   dump_chdb
+  restore_chdb
 );
 
 use_ok( $module, @subs);

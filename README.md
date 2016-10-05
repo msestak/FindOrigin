@@ -40,6 +40,14 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # dump all tables in a database
     FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --max_processes=8
 
+    # restore a single table
+    FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz
+    FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz --drop_tbl
+
+    # restore all tables to a database
+    FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8
+    FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8 --drop_tbl
+
 # DESCRIPTION
 
 FindOrigin is modulino used to analyze BLAST database (to get content in genomes and sequences) and BLAST output (to figure out where are hits coming from). It includes config, command-line and logging management.
@@ -163,6 +171,19 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 
     Exports a single table or all tables from a database. It exports both metadata (create table) and table contents.
     Native is the most efficient format. CSV, TabSeparated, JSONEachRow are more portable: you may import/export data to another DBMS.
+    It can run in parallel if --max\_processes specified.
+
+- restore\_chdb
+
+        # restore a single table
+        FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz
+        FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz --drop_tbl
+
+        # restore all tables to a database
+        FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8
+        FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8 --drop_tbl
+
+    Restores a single table or all tables from a directory. It creates (optionally drops) a table and imports table contents. It uses pigz to decompress table contents.
     It can run in parallel if --max\_processes specified.
 
 # CONFIGURATION

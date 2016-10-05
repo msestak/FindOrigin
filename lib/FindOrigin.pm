@@ -44,6 +44,7 @@ our @EXPORT_OK = qw{
   exclude_ti_from_blastout
   import_blastdb
   dump_chdb
+  restore_chdb
 
 };
 
@@ -98,6 +99,7 @@ sub run {
         exclude_ti_from_blastout =>
                             \&exclude_ti_from_blastout,    # excludes specific tax_id from BLAST output file
         dump_chdb            => \&dump_chdb,               # exports one table or all tables from database
+        restore_chdb         => \&restore_chdb,            # imports one table or all tables from file into a database
 
     );
 
@@ -206,10 +208,13 @@ sub get_parameters_from_cmd {
         'report_ps_tbl=s'  => \$cli{report_ps_tbl},
         'report_exp_tbl=s' => \$cli{report_exp_tbl},
 
-        # table and format for export
-        'table_ch=s'       => \$cli{table_ch},
-        'format_ex=s'      => \$cli{format_ex},
-        'max_processes=i'  => \$cli{max_processes},
+        # table and format for export/restore
+        'table_ch=s'      => \$cli{table_ch},
+        'format_ex=s'     => \$cli{format_ex},
+        'max_processes=i' => \$cli{max_processes},
+        'drop_tbl|drop'   => \$cli{drop_tbl}, #flag
+        'tbl_sql=s'       => \$cli{tbl_sql},
+        'tbl_contents=s'  => \$cli{tbl_contents},
 
         # connection parameters
         'host|ho=s'    => \$cli{host},
@@ -2038,7 +2043,7 @@ sub _get_row_cnt_ch {
 }
 
 
-### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+### INTERNAL UTILITY ###
 # Usage      : _drop_columns_ch( { ch => $ch, table_name => $names_tbl, col => \@col_to_drop, %$param_href } );
 # Purpose    : to drop columns from table
 # Returns    : nothing
@@ -2069,7 +2074,7 @@ sub _drop_columns_ch {
 }
 
 
-### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+### INTERFACE SUB ###
 # Usage      : --mode=queue_and_run
 # Purpose    : to run all steps for multiple blast output files
 # Returns    : nothing
@@ -2308,7 +2313,7 @@ sub _create_db_only {
 }
 
 
-### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+### INTERNAL UTILITY ###
 # Usage      : _create_support_tbl( $param_href );
 # Purpose    : creates support table to hold information about organisms processed
 # Returns    : nothing
@@ -2373,9 +2378,6 @@ sub dump_chdb {
     my $out      = $param_href->{out} or $log->logcroak('no $out specified on command line!');
     my $format_ex = defined $param_href->{format_ex} ? $param_href->{format_ex} : 'Native';    # or TabSeparated
 
-    # connect to database
-    my $ch = _get_ch($param_href);
-
     # dump only table if specified
     if ($table_ch) {
         _dump_table_only( $param_href );
@@ -2404,7 +2406,7 @@ sub _dump_table_only {
 
     # dump metadata
     my $ch_tbl_to_export = "$param_href->{database}.$param_href->{table_ch}";
-    my $tbl_create_sql = path( $param_href->{out}, "$param_href->{database}_" . $param_href->{table_ch} . '.sql' );
+    my $tbl_create_sql = path( $param_href->{out}, "$param_href->{database}." . $param_href->{table_ch} . '.sql' );
     my $cmd
       = qq{clickhouse-client --query="SHOW CREATE TABLE $ch_tbl_to_export" --format=TabSeparatedRaw > $tbl_create_sql};
     my ( $stdout, $stderr, $exit ) = _capture_output( $cmd, $param_href );
@@ -2416,17 +2418,7 @@ sub _dump_table_only {
     }
 
     # dump table contents
-    my $format;
-    if ( $param_href->{format_ex} eq 'Native' ) {
-        $format = lc $param_href->{format_ex};
-    }
-    elsif ( $param_href->{format_ex} eq 'TabSeparated' ) {
-        $format = 'tsv';
-    }
-    else {
-        $format = $param_href->{format_ex};
-    }
-    my $tbl_dump = path( $param_href->{out}, "$param_href->{database}_" . $param_href->{table_ch} . '.' . $format . '.gz' );
+    my $tbl_dump = path( $param_href->{out}, "$param_href->{database}." . $param_href->{table_ch} . '.' . $param_href->{format_ex} . '.gz' );
     my $cmd_tbl
       = qq{clickhouse-client --query="SELECT * FROM $ch_tbl_to_export FORMAT $param_href->{format_ex}" | pigz > $tbl_dump};
     my ( $stdout2, $stderr2, $exit2 ) = _capture_output( $cmd_tbl, $param_href );
@@ -2479,8 +2471,203 @@ sub _dump_entire_db {
 }
 
 
-#pigz -c -d kam_ac3_map.tsv.gz | clickhouse-client --database jura --query "INSERT INTO ac3_map FORMAT TabSeparated"
-#clickhouse-client --database jura < kam_ac3_map.sql
+### INTERFACE SUB ###
+# Usage      : --mode=restore_chdb
+# Purpose    : imports tables into database
+# Returns    : nothing
+# Parameters : $param_href->{tbl_sql} and $param_href->{tbl_contents} for table import
+#            : $param_href->{in} for database import
+#            : $param_href->{database} for both
+# Throws     : croaks if wrong number of parameters
+# Comments   : works in parallel for entire database
+#            : 2 modes: table and entire database import
+# See Also   : 
+sub restore_chdb {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('restore_chdb() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $database = $param_href->{database} or $log->logcroak('no $database specified on command line!');
+    my $tbl_sql  = $param_href->{tbl_sql};
+    my $tbl_contents = $param_href->{tbl_contents};
+
+    # restore only one table if specified
+    if ($tbl_sql and $tbl_contents) {
+        _restore_table($param_href);
+    }
+
+    # else restore all tables in a database
+    else {
+		_restore_entire_db($param_href);
+    }
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : _restore_table($param_href);
+# Purpose    : to restore a single table into database
+# Returns    : nothing
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : it can drop table
+#            : it can change database where it imports
+# See Also   : 
+sub _restore_table {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_restore_table() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # handle filenames
+    my $tbl_sql        = $param_href->{tbl_sql};
+    my $tbl_sql_abs    = path( $param_href->{tbl_sql} )->absolute;
+    my $tbl_to_restore = path( $param_href->{tbl_sql} )->basename;
+    $tbl_to_restore =~ s/\.sql//g;
+    my ( $db_name, $tbl_name ) = $tbl_to_restore =~ m/\A([^\.]+)\.(.+)\z/;
+
+    # drop table if specified with --drop_tbl
+    my $drop_tbl = defined $param_href->{drop_tbl} ? $param_href->{drop_tbl} : 0;    # 0 means do not drop
+    if ($drop_tbl) {
+        my $drop_tbl_q = qq{DROP TABLE $param_href->{database}.$tbl_name};
+        my $cmd_drop   = qq{clickhouse-client --query="$drop_tbl_q"};
+        my ( $stdout_drop, $stderr_drop, $exit_drop ) = _capture_output( $cmd_drop, $param_href );
+        if ( $exit_drop == 0 ) {
+            $log->debug("Action: table {$param_href->{database}.$tbl_name} deleted");
+        }
+        else {
+            $log->debug("Report: table {$tbl_name} doesn't exist in {$param_href->{database}}: $stderr_drop");
+        }
+    }
+
+    # change SQL if not equal
+    if ( $db_name ne $param_href->{database} ) {
+
+        # Get a handle on the code...
+        open my $sql_fh, '<', $tbl_sql_abs or $log->logdie("Error: can't open sqlfile {$tbl_sql_abs}: $!");
+
+        # Read it all in...
+        my $create_sql = do { local $/; <$sql_fh> };
+        $create_sql =~ s/CREATE TABLE ([^\.]+)\./CREATE TABLE $param_href->{database}\./;
+
+        # restore metadata
+        my $cmd_meta_changed = qq{clickhouse-client --query="$create_sql"};
+        my ( $stdout_meta_changed, $stderr_meta_changed, $exit_meta_changed )
+          = _capture_output( $cmd_meta_changed, $param_href );
+        if ( $exit_meta_changed == 0 ) {
+            $log->debug("Action: table {$param_href->{database}.$tbl_name} created");
+        }
+        else {
+            $log->logdie("Error: $cmd_meta_changed failed: $stderr_meta_changed");
+        }
+
+    }
+    else {
+        # restore metadata
+        my $cmd_meta = qq{clickhouse-client < $tbl_sql_abs};
+        my ( $stdout_meta, $stderr_meta, $exit_meta ) = _capture_output( $cmd_meta, $param_href );
+        if ( $exit_meta == 0 ) {
+            $log->debug("Action: table {$tbl_to_restore} created");
+        }
+        else {
+            $log->logdie("Error: $cmd_meta failed: $stderr_meta");
+        }
+    }
+
+    # PART 2: restore table contents
+    my $tbl_contents     = $param_href->{tbl_contents};
+    my $tbl_contents_abs = path( $param_href->{tbl_contents} )->absolute;
+    my $file_to_restore  = path( $param_href->{tbl_contents} )->basename;
+    $file_to_restore =~ s/\.gz//;
+    my ( $db_name_from_file, $tbl_name_from_file, $format ) = $file_to_restore =~ m/\A([^\.]+)\.([^\.]+)\.(.+)\z/;
+    my $cmd_content
+      = qq{pigz -c -d $tbl_contents_abs | clickhouse-client --query="INSERT INTO $param_href->{database}.$tbl_name_from_file FORMAT $format"};
+    my ( $stdout_content, $stderr_content, $exit_content ) = _capture_output( $cmd_content, $param_href );
+
+    if ( $exit_content == 0 ) {
+        $log->info("Action: table {$param_href->{database}.$tbl_name_from_file} restored from $tbl_contents_abs");
+    }
+    else {
+        $log->logdie("Error: $cmd_content failed: $stderr_content");
+    }
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : _restore_entire_db( $param_href );
+# Purpose    : to restore all tables in a directory to a database
+# Returns    : nothing
+# Parameters : needs --in
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   : _restore_table()
+sub _restore_entire_db {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_restore_entire_db() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # if not specified don't run in parallel
+    my $max_processes = defined $param_href->{max_processes} ? $param_href->{max_processes} : 1;
+
+    # collect all tables in a --in directory
+    my $in = $param_href->{in} or $log->logcroak('no $in specified on command line!');
+    my @sql_def = File::Find::Rule->file()->name('*.sql')->in($in);
+    @sql_def = sort { $a cmp $b } @sql_def;
+    #print Dumper( \@sql_def );
+    my @sql_content = File::Find::Rule->file()->name('*.gz')->in($in);
+    @sql_content = sort { $a cmp $b } @sql_content;
+    #print Dumper( \@sql_content );
+
+    # create hash pairs (sql => tbl_content) to send to _restore_table()
+    my %sql_plus_content_pair;
+    if ( scalar @sql_def == scalar @sql_content ) {
+
+        # check sql files
+      SQL:
+        foreach my $sql (@sql_def) {
+            my $sql_name = path($sql)->basename;
+            $sql_name =~ s/\.sql//;
+            #say "SQL_NAME:$sql_name";
+
+            # check sql contents
+            foreach my $content (@sql_content) {
+                my $content_name = path($content)->basename;
+                $content_name =~ s{\A([^\.]+)\.([^\.]+)\..+\z}{$1\.$2};
+                #say "CONTENT_NAME:$content_name";
+
+                # if match found join them in hash
+                if ( $sql_name eq $content_name ) {
+                    $sql_plus_content_pair{$sql} = $content;
+                    next SQL;
+                }
+            }
+        }
+    }
+    else {
+        $log->logdie("Error: missing files in $in");
+    }
+    #print Dumper( \%sql_plus_content_pair );
+
+    # count number of tables to be restored
+    my $restore_cnt = keys %sql_plus_content_pair;
+    $log->info("Report: restoring {$restore_cnt} tables from $in to database:$param_href->{database}");
+
+    # restore them in parallel
+    my $pm = Parallel::ForkManager->new($max_processes);
+  RESTORE:
+    foreach my $tbl_sql ( keys %sql_plus_content_pair ) {
+        my $pid = $pm->start and next RESTORE;
+        _restore_table( { %{$param_href}, tbl_sql => $tbl_sql, tbl_contents => $sql_plus_content_pair{$tbl_sql} } );
+        $pm->finish;
+    }
+    $pm->wait_all_children;
+
+    return;
+}
+
+
 1;
 __END__
 
@@ -2527,6 +2714,15 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
 
     # dump all tables in a database
     FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --max_processes=8
+
+    # restore a single table
+    FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz
+    FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz --drop_tbl
+
+    # restore all tables to a database
+    FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8
+    FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8 --drop_tbl
+
 
 
 =head1 DESCRIPTION
@@ -2656,6 +2852,20 @@ It first (re)creates database where it will run, imports names file only once an
 Exports a single table or all tables from a database. It exports both metadata (create table) and table contents.
 Native is the most efficient format. CSV, TabSeparated, JSONEachRow are more portable: you may import/export data to another DBMS.
 It can run in parallel if --max_processes specified.
+
+=item restore_chdb
+
+ # restore a single table
+ FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz
+ FindOrigin.pm --mode=restore_chdb --database=jura --tbl_sql=/msestak/blastout/kam.am3_map.sql --tbl_contents=/msestak/blastout/kam.am3_map.Native.gz --drop_tbl
+
+ # restore all tables to a database
+ FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8
+ FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8 --drop_tbl
+
+Restores a single table or all tables from a directory. It creates (optionally drops) a table and imports table contents. It uses pigz to decompress table contents.
+It can run in parallel if --max_processes specified.
+
 
 =back
 
