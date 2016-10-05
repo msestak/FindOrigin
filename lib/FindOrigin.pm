@@ -42,6 +42,7 @@ our @EXPORT_OK = qw{
   queue_and_run
   exclude_ti_from_blastout
   import_blastdb
+  dump_chdb
 
 };
 
@@ -95,6 +96,7 @@ sub run {
         queue_and_run        => \&queue_and_run,           # runs all steps for all blastout files
         exclude_ti_from_blastout =>
                             \&exclude_ti_from_blastout,    # excludes specific tax_id from BLAST output file
+        dump_chdb            => \&dump_chdb,               # exports one table or all tables from database
 
     );
 
@@ -174,6 +176,7 @@ sub get_parameters_from_cmd {
 
     #mode, quiet and verbose can only be set on command line
     GetOptions(
+        # general options
         'help|h'       => \$cli{help},
         'man|m'        => \$cli{man},
         'config|cnf=s' => \$cli{config},
@@ -182,14 +185,17 @@ sub get_parameters_from_cmd {
         'out|o=s'      => \$cli{out},
         'outfile|of=s' => \$cli{outfile},
 
+        # files
         'blastout=s' => \$cli{blastout},
         'blastdb=s'  => \$cli{blastdb},
         'names|na=s' => \$cli{names},
         'map=s'      => \$cli{map},
         'stats=s'    => \$cli{stats},
 
+        # tax_id
         'tax_id|ti=i' => \$cli{tax_id},
 
+        # tables in database
         'blastout_tbl=s'   => \$cli{blastout_tbl},
         'blastdb_tbl=s'    => \$cli{blastdb_tbl},
         'names_tbl=s'      => \$cli{names_tbl},
@@ -199,12 +205,18 @@ sub get_parameters_from_cmd {
         'report_ps_tbl=s'  => \$cli{report_ps_tbl},
         'report_exp_tbl=s' => \$cli{report_exp_tbl},
 
+        # table and format for export
+        'table_ch=s'       => \$cli{table_ch},
+        'format_ex=s'      => \$cli{format_ex},
+
+        # connection parameters
         'host|ho=s'    => \$cli{host},
         'database|d=s' => \$cli{database},
         'user|u=s'     => \$cli{user},
         'password|p=s' => \$cli{password},
         'port|po=i'    => \$cli{port},
 
+        # mode of action and verbosity
         'mode|mo=s{1,}' => \$cli{mode},       #accepts 1 or more arguments
         'quiet|q'       => \$cli{quiet},      #flag
         'verbose+'      => \$cli{verbose},    #flag
@@ -2341,6 +2353,120 @@ sub _create_support_tbl {
 }
 
 
+### INTERFACE SUB ###
+# Usage      : --mode=dump_chdb
+# Purpose    : export a single table from database or entire database
+# Returns    : nothing
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : it writes pigz compressed files
+# See Also   : 
+sub dump_chdb {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('dump_chdb() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    my $database = $param_href->{database} or $log->logcroak('no $database specified on command line!');
+    my $table_ch = $param_href->{table_ch};
+    my $out      = $param_href->{out} or $log->logcroak('no $out specified on command line!');
+    my $format_ex = defined $param_href->{format_ex} ? $param_href->{format_ex} : 'Native';    # or TabSeparated
+
+    # connect to database
+    my $ch = _get_ch($param_href);
+
+    # dump only table if specified
+    if ($table_ch) {
+        _dump_table_only( $param_href );
+    }
+	# else dump all tables in a database
+    else {
+        _dump_entire_db( $param_href );
+    }
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : _dump_table_only( $param_href);
+# Purpose    : export a single table from ClickHouse
+# Returns    : nothing
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   : 
+sub _dump_table_only {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_dump_table_only() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # dump metadata
+    my $ch_tbl_to_export = "$param_href->{database}.$param_href->{table_ch}";
+    my $tbl_create_sql = path( $param_href->{out}, "$param_href->{database}_" . $param_href->{table_ch} . '.sql' );
+    my $cmd
+      = qq{clickhouse-client --query="SHOW CREATE TABLE $ch_tbl_to_export" --format=TabSeparatedRaw > $tbl_create_sql};
+    my ( $stdout, $stderr, $exit ) = _capture_output( $cmd, $param_href );
+    if ( $exit == 0 ) {
+        $log->debug("Action: table {$ch_tbl_to_export} metadata exported to $tbl_create_sql");
+    }
+    else {
+        $log->logdie("Error: $cmd failed: $stderr");
+    }
+
+    # dump table contents
+    my $format;
+    if ( $param_href->{format_ex} eq 'Native' ) {
+        $format = lc $param_href->{format_ex};
+    }
+    elsif ( $param_href->{format_ex} eq 'TabSeparated' ) {
+        $format = 'tsv';
+    }
+    else {
+        $format = $param_href->{format_ex};
+    }
+    my $tbl_dump = path( $param_href->{out}, "$param_href->{database}_" . $param_href->{table_ch} . '.' . $format . '.gz' );
+    my $cmd_tbl
+      = qq{clickhouse-client --query="SELECT * FROM $ch_tbl_to_export FORMAT $param_href->{format_ex}" | pigz > $tbl_dump};
+    my ( $stdout2, $stderr2, $exit2 ) = _capture_output( $cmd_tbl, $param_href );
+    if ( $exit2 == 0 ) {
+        $log->info("Action: table {$ch_tbl_to_export} exported to $tbl_dump");
+    }
+    else {
+        $log->logdie("Error: $cmd_tbl failed: $stderr2");
+    }
+
+    return;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : _dump_entire_db( $param_href );
+# Purpose    : to dump all tables in a database
+# Returns    : nothing
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   : _dump_table_only()
+sub _dump_entire_db {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_dump_entire_db() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # connect to database
+    my $ch = _get_ch($param_href);
+
+    # select all tables in a database
+    my $select_tbl_q = qq{ SELECT name FROM system.tables WHERE database = '$param_href->{database}' };
+    my $tbl_aref     = $ch->select($select_tbl_q);
+    my @tables       = map { $_->[0] } @{$tbl_aref};
+
+    # dump them one by one
+    foreach my $tbl (@tables) {
+        _dump_table_only( { %{$param_href}, table_ch => $tbl } );
+    }
+
+    return;
+}
 
 
 1;
@@ -2383,6 +2509,12 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
 
     # removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
     FindOrigin.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
+
+    # dump a single table
+    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new -v -v
+
+    # dump all tables in a database
+    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native -v -v
 
 
 =head1 DESCRIPTION
@@ -2500,6 +2632,17 @@ Imports BLAST database file into ClickHouse (it splits prot_id into 2 extra colu
 
 Imports all BLAST output files in a given directory and calculates unique hits per species for all one by one.
 It first (re)creates database where it will run, imports names file only once and collects BLAST output, stats and map files and imports all these triplets.
+
+=item dump_chdb
+
+ # dump a single table
+ FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new -v -v
+
+ # dump all tables in a database
+ FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native -v -v
+
+Exports a single table or all tables from a database. It exports both metadata (create table) and table contents.
+Native is the most efficient format. CSV, TabSeparated, JSONEachRow are more portable: you may import/export data to another DBMS.
 
 =back
 

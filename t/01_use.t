@@ -22,6 +22,7 @@ my @subs = qw(
   queue_and_run
   exclude_ti_from_blastout
   import_blastdb
+  dump_chdb
 );
 
 use_ok( $module, @subs);

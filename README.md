@@ -34,6 +34,12 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # removes specific hits from the BLAST output based on the specified tax_id (exclude bad genomes).
     FindOrigin.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
 
+    # dump a single table
+    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new -v -v
+
+    # dump all tables in a database
+    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native -v -v
+
 # DESCRIPTION
 
 FindOrigin is modulino used to analyze BLAST database (to get content in genomes and sequences) and BLAST output (to figure out where are hits coming from). It includes config, command-line and logging management.
@@ -146,6 +152,17 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 
     Imports all BLAST output files in a given directory and calculates unique hits per species for all one by one.
     It first (re)creates database where it will run, imports names file only once and collects BLAST output, stats and map files and imports all these triplets.
+
+- dump\_chdb
+
+        # dump a single table
+        FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new -v -v
+
+        # dump all tables in a database
+        FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native -v -v
+
+    Exports a single table or all tables from a database. It exports both metadata (create table) and table contents.
+    Native is the most efficient format. CSV, TabSeparated, JSONEachRow are more portable: you may import/export data to another DBMS.
 
 # CONFIGURATION
 
