@@ -22,6 +22,7 @@ use ClickHouse;
 use PerlIO::gzip;
 use File::Temp qw(tempfile);
 use DateTime::Tiny;
+use Parallel::ForkManager;
 
 our $VERSION = "0.01";
 
@@ -208,6 +209,7 @@ sub get_parameters_from_cmd {
         # table and format for export
         'table_ch=s'       => \$cli{table_ch},
         'format_ex=s'      => \$cli{format_ex},
+        'max_processes=i'  => \$cli{max_processes},
 
         # connection parameters
         'host|ho=s'    => \$cli{host},
@@ -2452,6 +2454,9 @@ sub _dump_entire_db {
     $log->logcroak('_dump_entire_db() needs a $param_href') unless @_ == 1;
     my ($param_href) = @_;
 
+    # if not specified don't run in parallel
+    my $max_processes = defined $param_href->{max_processes} ? $param_href->{max_processes} : 1;
+
     # connect to database
     my $ch = _get_ch($param_href);
 
@@ -2460,15 +2465,22 @@ sub _dump_entire_db {
     my $tbl_aref     = $ch->select($select_tbl_q);
     my @tables       = map { $_->[0] } @{$tbl_aref};
 
-    # dump them one by one
+    # dump them in parallel
+    my $pm = Parallel::ForkManager->new($max_processes);
+  DUMP:
     foreach my $tbl (@tables) {
+        my $pid = $pm->start and next DUMP;
         _dump_table_only( { %{$param_href}, table_ch => $tbl } );
+        $pm->finish;
     }
+    $pm->wait_all_children;
 
     return;
 }
 
 
+#pigz -c -d kam_ac3_map.tsv.gz | clickhouse-client --database jura --query "INSERT INTO ac3_map FORMAT TabSeparated"
+#clickhouse-client --database jura < kam_ac3_map.sql
 1;
 __END__
 
@@ -2511,10 +2523,10 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=exclude_ti_from_blastout --blastout t/data/hs_all_plus_21_12_2015.gz -ti 428574 -v
 
     # dump a single table
-    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new -v -v
+    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new
 
     # dump all tables in a database
-    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native -v -v
+    FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --max_processes=8
 
 
 =head1 DESCRIPTION
@@ -2636,13 +2648,14 @@ It first (re)creates database where it will run, imports names file only once an
 =item dump_chdb
 
  # dump a single table
- FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new -v -v
+ FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --table_ch=names_dmp_fmt_new
 
  # dump all tables in a database
- FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native -v -v
+ FindOrigin.pm --mode=dump_chdb --database=kam --out=/msestak/blastout/ --format_ex=Native --max_processes=8
 
 Exports a single table or all tables from a database. It exports both metadata (create table) and table contents.
 Native is the most efficient format. CSV, TabSeparated, JSONEachRow are more portable: you may import/export data to another DBMS.
+It can run in parallel if --max_processes specified.
 
 =back
 
