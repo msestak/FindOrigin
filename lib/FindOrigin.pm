@@ -82,8 +82,8 @@ sub run {
     #$log->trace("This is example of trace logging for $0");
 
     #get dump of param_href if -v (verbose) flag is on (for debugging)
-    my $param_print = sprintf( Dumper($param_href) ) if $verbose;
-    $log->debug( '$param_href = ' . "$param_print" ) if $verbose;
+    my $param_print = sprintf( Data::Dumper->Dump( [ $param_href], [ qw(param_href) ] ) ) if $verbose;
+    $log->debug( "$param_print" ) if $verbose;
 
     #call write modes (different subs that print different jobs)
     my %dispatch = (
@@ -2113,10 +2113,11 @@ sub queue_and_run {
 
         # check if organism already exists (if yes skip)
         my $ch        = _get_ch($param_href);
-        my $organisms = $ch->select("SELECT organism FROM $param_href->{database}.support");
-        p $organisms;
-        foreach my $org_aref (@$organisms) {
-            my $organism = $org_aref->[0];
+        my $organisms_aref_of_arefs = $ch->select("SELECT organism FROM $param_href->{database}.support ORDER BY organism");
+        my @organisms = map { $_->[0] } @{$organisms_aref_of_arefs};
+        my $org_in_db_print = sprintf( Data::Dumper->Dump( [ \@organisms ], [ qw(*organisms_in_database) ]) );
+        $log->debug("$org_in_db_print");
+        foreach my $organism (@organisms) {
             if ( $organism eq $org_name ) {
                 $log->warn("Skip: $organism already in database");
                 next ORGANISM;
@@ -2171,17 +2172,20 @@ sub _collect_input_files {
     # get all stats files
     my @stats_files = File::Find::Rule->file()->name(qr/\A.+\.analyze\z/)->in($in);
     @stats_files = sort { $a cmp $b } @stats_files;
-    print Dumper( \@stats_files );
+    my $stats_print = sprintf( Data::Dumper->Dump( [ \@stats_files ], [qw(*stats_files)] ) );
+    $log->debug("$stats_print");
 
     # get all phylo_maps for organisms
     my @map_files = File::Find::Rule->file()->name(qr/\A.+\.phmap_names\z/)->in($in);
     @map_files = sort { $a cmp $b } @map_files;
-    print Dumper( \@map_files );
+    my $map_print = sprintf( Data::Dumper->Dump( [ \@map_files ], [qw(*map_files)] ) );
+    $log->debug("$map_print");
 
     # get all blastout files from indir
     my @blastout_files = File::Find::Rule->file()->name(qr/\A.+\.gz\z/)->in($in);
     @blastout_files = sort { $a cmp $b } @blastout_files;
-    print Dumper( \@blastout_files );
+    my $blout_print = sprintf( Data::Dumper->Dump( [ \@blastout_files ], [qw(*blastout_files)] ) );
+    $log->debug("$blout_print");
 
     # check for all files (each blastout needs map and stats)
     my %organisms;
@@ -2214,7 +2218,9 @@ sub _collect_input_files {
         }
     }
 
-    print Dumper( \%organisms );
+    my $org_print = sprintf( "%s", Data::Dumper->Dump( [ \%organisms ], [qw(*organisms)] ) );
+    $log->debug("$org_print");
+
     return \%organisms;
 }
 
