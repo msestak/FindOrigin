@@ -1254,7 +1254,8 @@ sub blastout_uniq {
     my $ch = _get_ch($param_href);
 
     # PART 1: create blastout_uniq table with prot_id, ti and e_value
-    my $blastout_uniq_tbl = _blastout_uniq_start($param_href);
+    # for large blast inputs use chunked version
+    my $blastout_uniq_tbl = _blastout_uniq_start_chunked($param_href);
 
     # PART 2: ADD phylostrata from map table
     my $blout_ps_tbl = _blastout_uniq_map($param_href);
@@ -1325,6 +1326,66 @@ sub _blastout_uniq_start {
     return $blastout_uniq_tbl;
 }
 
+
+### CLASS METHOD/INSTANCE METHOD/INTERFACE SUB/INTERNAL UTILITY ###
+# Usage      : my $blastout_uniq_tbl = _blastout_uniq_start_chunked( $param_href );
+# Purpose    : to create blastout_uniq table with prot_id, ti and e_value
+# Returns    : $blastout_uniq_tbl
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   : 
+sub _blastout_uniq_start_chunked {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_blastout_uniq_start_chunked() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # get new handle
+    my $ch = _get_ch($param_href);
+
+    # get table name
+    my $blastout_uniq_tbl = "$param_href->{blastout_tbl}_uniq";
+
+    # create blastout_uniq table
+    my $create_uniq_q = qq{
+    CREATE TABLE $blastout_uniq_tbl (
+    prot_id String,
+    ti UInt32,
+    e_value Float64,
+    date Date  DEFAULT today() )
+    ENGINE=MergeTree (date, (prot_id, ti), 8192) };
+
+    _create_table_ch( { table_name => $blastout_uniq_tbl, ch => $ch, query => $create_uniq_q, %$param_href } );
+    $log->trace("Report: $create_uniq_q");
+
+    # retrieve all prot_ids to iterate on them
+    my $select_prot_id_aref
+      = $ch->select("SELECT DISTINCT prot_id FROM $param_href->{database}.$param_href->{blastout_tbl}");
+    my @prot_id = map { $_->[0] } @{$select_prot_id_aref};
+    my $prot_id_cnt = @prot_id;
+
+    # iterate on prot_ids and insert into uniq_tbl
+    foreach my $prot_id (@prot_id) {
+        my $insert_uniq_q = qq{
+        INSERT INTO $param_href->{database}.$blastout_uniq_tbl (prot_id, ti, e_value)
+        SELECT DISTINCT prot_id, toUInt32(extract(substring(blast_hit, 28,20), '\\\\d+')) AS ti, min(e_value) AS e_value
+        FROM $param_href->{database}.$param_href->{blastout_tbl}
+        WHERE prot_id = '$prot_id'
+        GROUP BY prot_id, ti
+        };
+        #$log->trace("$insert_uniq_q");
+        eval { $ch->do($insert_uniq_q); };
+        $log->logdie("Error: inserting {$param_href->{database}.$blastout_uniq_tbl} failed for prot_id:$prot_id: $@")
+          if $@;
+        #$log->trace("Action: {$param_href->{database}.$blastout_uniq_tbl} inserted for prot_id:$prot_id") unless $@;
+    }
+    $log->info("Action: {$param_href->{database}.$blastout_uniq_tbl} inserted with $prot_id_cnt prot_ids");
+
+    # check number of rows inserted
+    my $row_cnt = _get_row_cnt_ch( { ch => $ch, table_name => $blastout_uniq_tbl, %$param_href } );
+
+    return $blastout_uniq_tbl;
+}
 
 ### INTERNAL UTILITY ###
 # Usage      : my $blout_ps_tbl = _blastout_uniq_map( $param_href );
