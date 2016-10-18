@@ -19,6 +19,7 @@ my @subs = qw(
   import_names
   blastout_uniq
   bl_uniq_expanded
+  bl_uniq_exp_iter
   queue_and_run
   exclude_ti_from_blastout
   import_blastdb

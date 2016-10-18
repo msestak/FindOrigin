@@ -45,6 +45,7 @@ our @EXPORT_OK = qw{
   import_blastdb
   dump_chdb
   restore_chdb
+  bl_uniq_exp_iter
 
 };
 
@@ -93,7 +94,8 @@ sub run {
         import_blastdb_stats => \&import_blastdb_stats,    # import BLAST database stats file
         import_names         => \&import_names,            # import names file
         blastout_uniq        => \&blastout_uniq,           # analyzes BLAST output file using map, names and blastout tables
-        bl_uniq_expanded     => \&bl_uniq_expanded,        # add unique BLAST hits per species
+        bl_uniq_expanded     => \&bl_uniq_expanded,        # add unique BLAST hits per species (at once, faster, large memory)
+        bl_uniq_exp_iter     => \&bl_uniq_exp_iter,        # add unique BLAST hits per species (iteratively, slower, less memory)
         import_blastdb       => \&import_blastdb,          # import BLAST database with all columns
         queue_and_run        => \&queue_and_run,           # runs all steps for all blastout files
         exclude_ti_from_blastout =>
@@ -1626,43 +1628,8 @@ sub bl_uniq_expanded {
     my $ch = _get_ch($param_href);
 
     # create table that will hold updated info (with genelists)
+	_create_exp_tbl( $param_href );
     my $report_ps_tbl_exp = "$param_href->{report_ps_tbl}" . '_expanded';
-    _drop_table_only_ch( { table_name => $report_ps_tbl_exp, ch => $ch, %{$param_href} } );
-    my $report_ps_tbl_exp_q = qq{
-    CREATE TABLE $param_href->{database}.$report_ps_tbl_exp (
-    ps UInt8,
-    ti UInt32,
-    species_name String,
-    gene_hits_per_species UInt64,
-    genelist String,
-    hits1 UInt32,
-    hits2 UInt32,
-    hits3 UInt32,
-    hits4 UInt32,
-    hits5 UInt32,
-    hits6 UInt32,
-    hits7 UInt32,
-    hits8 UInt32,
-    hits9 UInt32,
-    hits10 UInt32,
-    list1 String,
-    list2 String,
-    list3 String,
-    list4 String,
-    list5 String,
-    list6 String,
-    list7 String,
-    list8 String,
-    list9 String,
-    list10 String,
-    date Date  DEFAULT today()
-    )ENGINE=MergeTree (date, (ps, ti), 8192)
-    };
-    $log->trace("$report_ps_tbl_exp_q");
-
-    eval { $ch->do($report_ps_tbl_exp_q) };
-    $log->error("Error: creating {$param_href->{database}.$report_ps_tbl_exp} failed: $@") if $@;
-    $log->info("Action: {$param_href->{database}.$report_ps_tbl_exp} created successfully") unless $@;
 
     # build query to import back to database (needed later)
     my $import_query
@@ -1768,6 +1735,254 @@ sub bl_uniq_expanded {
           if $@;
         $log->trace("Action: {$param_href->{database}.$report_ps_tbl_exp} inserted successfully with {$arg_to_insert_cnt} records")
           unless $@;
+
+        $log->debug("Report: inserted ps $ps");
+    }    # end foreach ps
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$report_ps_tbl_exp", %$param_href } );
+
+    # PART 2: JOIN report and report_expanded table
+    # create final table that will hold updated info (with unique hits and lists)
+    my $report_ps_tbl_exp2 = "$param_href->{report_ps_tbl}" . '_expanded2';
+    _drop_table_only_ch( { table_name => $report_ps_tbl_exp2, ch => $ch, %{$param_href} } );
+
+    # join expanded table and original report table to get all columns together
+    my $report_ps_tbl_exp_q2 = qq{
+    CREATE TABLE $param_href->{database}.$report_ps_tbl_exp2
+    ENGINE=MergeTree (date, (ps, ti), 8192)
+    AS SELECT ps, ti_exp AS ti, species_name, gene_hits_per_species, genelist, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10, list1, list2, list3, list4, list5, list6, list7, list8, list9, list10, date_bl AS date
+    FROM (SELECT ti AS ti_exp, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10, list1, list2, list3, list4, list5, list6, list7, list8, list9, list10, date AS date_bl
+    FROM $param_href->{database}.$report_ps_tbl_exp)
+    ALL INNER JOIN
+    (SELECT ps, ti, species_name, gene_hits_per_species, genelist FROM $param_href->{database}.$param_href->{report_ps_tbl})
+    USING ti
+    };
+    $log->trace("$report_ps_tbl_exp_q2");
+
+    eval { $ch->do($report_ps_tbl_exp_q2) };
+    $log->error("Error: creating {$param_href->{database}.$report_ps_tbl_exp2} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$report_ps_tbl_exp2} created successfully") unless $@;
+
+    # check number of rows inserted
+    _get_row_cnt_ch( { ch => $ch, table_name => "$report_ps_tbl_exp2", %$param_href } );
+
+    # PART 3: DROP EXTRA TABLES AND RENAME REPORT TABLE
+    _drop_table_only_ch( { table_name => $report_ps_tbl_exp, ch => $ch, %{$param_href} } );
+
+    # rename report2 table to report table
+    my $rename_report_tbl_q
+      = qq{RENAME TABLE $param_href->{database}.$report_ps_tbl_exp2 TO $param_href->{database}.$report_ps_tbl_exp};
+    eval { $ch->do($rename_report_tbl_q) };
+    $log->error("Error: renaming {$param_href->{database}.$report_ps_tbl_exp2} failed: $@") if $@;
+    $log->info(
+        "Action: {$param_href->{database}.$report_ps_tbl_exp2} renamed to {$param_href->{database}.$report_ps_tbl_exp} successfully"
+    ) unless $@;
+
+    return $report_ps_tbl_exp;
+}
+
+
+### INTERNAL UTILITY ###
+# Usage      : _create_exp_tbl( $param_href );
+# Purpose    : creates 
+# Returns    : nothing
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : 
+# See Also   : 
+sub _create_exp_tbl {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('_create_exp_tbl() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # get new handle
+    my $ch = _get_ch($param_href);
+
+    # create table that will hold updated info (with genelists)
+    my $report_ps_tbl_exp = "$param_href->{report_ps_tbl}" . '_expanded';
+    _drop_table_only_ch( { table_name => $report_ps_tbl_exp, ch => $ch, %{$param_href} } );
+    my $report_ps_tbl_exp_q = qq{
+    CREATE TABLE $param_href->{database}.$report_ps_tbl_exp (
+    ps UInt8,
+    ti UInt32,
+    species_name String,
+    gene_hits_per_species UInt64,
+    genelist String,
+    hits1 UInt32,
+    hits2 UInt32,
+    hits3 UInt32,
+    hits4 UInt32,
+    hits5 UInt32,
+    hits6 UInt32,
+    hits7 UInt32,
+    hits8 UInt32,
+    hits9 UInt32,
+    hits10 UInt32,
+    list1 String,
+    list2 String,
+    list3 String,
+    list4 String,
+    list5 String,
+    list6 String,
+    list7 String,
+    list8 String,
+    list9 String,
+    list10 String,
+    date Date  DEFAULT today()
+    )ENGINE=MergeTree (date, (ps, ti), 8192)
+    };
+    $log->trace("$report_ps_tbl_exp_q");
+
+    eval { $ch->do($report_ps_tbl_exp_q) };
+    $log->error("Error: creating {$param_href->{database}.$report_ps_tbl_exp} failed: $@") if $@;
+    $log->info("Action: {$param_href->{database}.$report_ps_tbl_exp} created successfully") unless $@;
+
+    return;
+}
+
+
+### INTERFACE SUB ###
+# Usage      : --mode=bl_uniq_exp_iter
+# Purpose    : expands genehits into types (how many hits per phylostratum) to find repeating and unique hits
+# Returns    : name of the report_exp_tbl table
+# Parameters : 
+# Throws     : croaks if wrong number of parameters
+# Comments   : works with report table that --mode=blastout_uniq created
+# See Also   : 
+sub bl_uniq_exp_iter {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('bl_uniq_exp_iter() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # get new handle
+    my $ch = _get_ch($param_href);
+
+    # create table that will hold updated info (with genelists)
+    _create_exp_tbl($param_href);
+    my $report_ps_tbl_exp = "$param_href->{report_ps_tbl}" . '_expanded';
+
+    # build query to import back to database (needed later)
+    my $import_query
+      = qq{INSERT INTO $param_href->{database}.$report_ps_tbl_exp (ti, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10, list1, list2, list3, list4, list5, list6, list7, list8, list9, list10 ) VALUES};
+    $log->trace("$import_query");
+
+    # get phylostrata from REPORT_PER_PS table to iterate on phylostrata
+    my $select_ps_q = qq{ SELECT DISTINCT ps FROM $param_href->{database}.$param_href->{report_ps_tbl} ORDER BY ps};
+    my $ps_aref     = $ch->select($select_ps_q);
+    my @ps          = map { $_->[0] } @{$ps_aref};
+    $log->trace( 'Returned phylostrata: {', join( '}{', @ps ), '}' );
+
+    # iterate on phylostrata (compare genelists inside phylostrata)
+    foreach my $ps (@ps) {
+
+        #get ti_list from db per ps sorted by gene_hits_per_species
+        my $select_ti_list_from_report_q = qq{
+        SELECT DISTINCT ti
+        FROM $param_href->{database}.$param_href->{report_ps_tbl}
+        WHERE ps = $ps
+        ORDER BY gene_hits_per_species
+        };
+        my $ti_aref = $ch->select($select_ti_list_from_report_q);
+        my @ti = map { $_->[0] } @{$ti_aref};
+
+        # count prot_ids ans store into hash to be used later
+        my %prot_id_seen;
+        foreach my $ti (@ti) {
+
+            #get gene_list from db
+            my $select_genelist_from_report_q = qq{
+            SELECT genelist
+            FROM $param_href->{database}.$param_href->{report_ps_tbl}
+            WHERE ps = $ps AND ti = $ti
+            };
+            my $genelist_aref = $ch->select($select_genelist_from_report_q);
+            my @genelist_one  = @{ $genelist_aref->[0] };
+            my @genelist_exp  = split ",", $genelist_one[0];
+
+            # get count of each prot_id
+            foreach my $prot_id (@genelist_exp) {
+                $prot_id_seen{$prot_id}++;
+            }
+        }
+
+        # now extract information from stored hash to label prot_ids as unique
+        # get unique count per tax_id
+        my @arg_list;
+        my $arg_to_insert_cnt = 0;
+        foreach my $ti (@ti) {
+
+            #get gene_list from db
+            my $select_genelist_from_report_q = qq{
+            SELECT genelist
+            FROM $param_href->{database}.$param_href->{report_ps_tbl}
+            WHERE ps = $ps AND ti = $ti
+            };
+            my $genelist_aref = $ch->select($select_genelist_from_report_q);
+            my @genelist_one  = @{ $genelist_aref->[0] };
+            my @genelist_exp  = split ",", $genelist_one[0];
+
+            my ( $ti_unique,     $ti2,  $ti3,  $ti4,  $ti5,  $ti6,  $ti7,  $ti8,  $ti9,  $ti10 )  = (0) x 11;
+            my ( $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g ) = ('') x 11;
+
+            # do the calculation here (tabulated ternary) 10 and 10+hits go to hits10
+            foreach my $prot_id (@genelist_exp) {
+                    $prot_id_seen{$prot_id} == 1 ? do { $ti_unique++; $ti_uniq_genes .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 2 ? do { $ti2++;       $ti2g          .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 3 ? do { $ti3++;       $ti3g          .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 4 ? do { $ti4++;       $ti4g          .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 5 ? do { $ti5++;       $ti5g          .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 6 ? do { $ti6++;       $ti6g          .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 7 ? do { $ti7++;       $ti7g          .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 8 ? do { $ti8++;       $ti8g          .= ',' . $prot_id; }
+                  : $prot_id_seen{$prot_id} == 9 ? do { $ti9++;       $ti9g          .= ',' . $prot_id; }
+                  :                                do { $ti10++;      $ti10g         .= ',' . $prot_id; };
+            }
+
+            # remove comma at start
+            foreach my $genelist ( $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g ) {
+                $genelist =~ s/\A,(.+)\z/$1/;
+            }
+
+            #say "TI_numbe:$ti\tuniq:$ti_unique\tti2:$ti2\tti3:$ti3\tti4:$ti4\tti5:$ti5\tti6:$ti6\tti7:$ti7\tti8:$ti8\tti9:$ti9\tti10:$ti10";
+            #say "TI_genes:$ti\tuniq:$ti_uniq_genes\tti2:$ti2g\tti3:$ti3g\tti4:$ti4g\tti5:$ti5g\tti6:$ti6g\tti7:$ti7g\tti8:$ti8g\tti9:$ti9g\tti10:$ti10g";
+
+            # insert into db
+            push @arg_list,
+              [ $ti, $ti_unique, $ti2, $ti3, $ti4, $ti5, $ti6, $ti7, $ti8, $ti9, $ti10,
+                $ti_uniq_genes, $ti2g, $ti3g, $ti4g, $ti5g, $ti6g, $ti7g, $ti8g, $ti9g, $ti10g
+              ];
+            $arg_to_insert_cnt++;
+
+            # insert in small chunks (else Perl memory grows)
+            if ( $arg_to_insert_cnt >= 1000 ) {
+                my $ch2 = _get_ch($param_href);
+
+                eval { $ch2->do( $import_query, @arg_list ) };
+                my $arg_list_dump = sprintf("%s", Dumper \@arg_list);
+                $log->error("Error: inserting into {$param_href->{database}.$report_ps_tbl_exp} failed: $@ $import_query ARG_LIST:$arg_list_dump")
+                  if $@;
+                $log->trace(
+                    "Action: {$param_href->{database}.$report_ps_tbl_exp} inserted successfully with {$arg_to_insert_cnt} records"
+                ) unless $@;
+
+                # back to empty for another chunk
+                $arg_to_insert_cnt = 0;
+                @arg_list          = ();
+            }
+
+        }    # end second foreach ti
+
+        # import all remaining calculated values into table
+        # get new handle
+        my $ch3 = _get_ch($param_href);
+
+        eval { $ch3->do( $import_query, @arg_list ) };
+        $log->error("Error: inserting into {$param_href->{database}.$report_ps_tbl_exp} failed: $@")
+          if $@;
+        $log->trace(
+            "Action: {$param_href->{database}.$report_ps_tbl_exp} inserted successfully with {$arg_to_insert_cnt} records"
+        ) unless $@;
 
         $log->debug("Report: inserted ps $ps");
     }    # end foreach ps
@@ -2199,7 +2414,7 @@ sub queue_and_run {
                 names_tbl     => $names_tbl,
             }
         );
-        my $report_exp_tbl = bl_uniq_expanded( { %$param_href, report_ps_tbl => $report_ps_tbl } );
+        my $report_exp_tbl = bl_uniq_exp_iter( { %$param_href, report_ps_tbl => $report_ps_tbl } );
 
         # import table names into support table to know if organism processed
         my $ch2      = _get_ch($param_href);
@@ -2872,11 +3087,11 @@ From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl2 which ho
 
 =item bl_uniq_expanded
 
- # options from command line
+ # grabs all genelists at once, large memory consumption, but faster
  FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
- # options from config
- FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
+ # works iteratively, less memory, but slower
+ FindOrigin.pm --mode=bl_uniq_exp_iter -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
 Update report_ps_tbl table with unique and intersect hits and gene lists.
 

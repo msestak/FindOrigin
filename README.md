@@ -126,11 +126,11 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 
 - bl\_uniq\_expanded
 
-        # options from command line
+        # grabs all genelists at once, large memory consumption, but faster
         FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
-        # options from config
-        FindOrigin.pm --mode=bl_uniq_expanded -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
+        # works iteratively, less memory, but slower
+        FindOrigin.pm --mode=bl_uniq_exp_iter -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
     Update report\_ps\_tbl table with unique and intersect hits and gene lists.
 
