@@ -40,12 +40,13 @@ our @EXPORT_OK = qw{
   import_names
   blastout_uniq
   bl_uniq_expanded
+  bl_uniq_exp_iter
   queue_and_run
   exclude_ti_from_blastout
   import_blastdb
   dump_chdb
   restore_chdb
-  bl_uniq_exp_iter
+  top_hits
 
 };
 
@@ -102,6 +103,7 @@ sub run {
                             \&exclude_ti_from_blastout,    # excludes specific tax_id from BLAST output file
         dump_chdb            => \&dump_chdb,               # exports one table or all tables from database
         restore_chdb         => \&restore_chdb,            # imports one table or all tables from file into a database
+        top_hits             => \&top_hits,                # selects top_hits from expanded tables
 
     );
 
@@ -217,6 +219,9 @@ sub get_parameters_from_cmd {
         'drop_tbl|drop'   => \$cli{drop_tbl}, #flag
         'tbl_sql=s'       => \$cli{tbl_sql},
         'tbl_contents=s'  => \$cli{tbl_contents},
+
+        # top hits
+        'top_hits=i'      => \$cli{top_hits},
 
         # connection parameters
         'host|ho=s'    => \$cli{host},
@@ -2950,6 +2955,76 @@ sub _restore_entire_db {
 }
 
 
+
+### INTERFACE SUB ###
+# Usage      : --mode=top_hits
+# Purpose    : selects top hits from blastout_uniq-report_per_ps_expanded tables
+# Returns    : name of the resulting table
+# Parameters : $param_href
+# Throws     : croaks if wrong number of parameters
+# Comments   :
+# See Also   :
+sub top_hits {
+    my $log = Log::Log4perl::get_logger("main");
+    $log->logcroak('top_hits() needs a $param_href') unless @_ == 1;
+    my ($param_href) = @_;
+
+    # take top 10 if not defined on command line
+    my $top_hits = defined $param_href->{top_hits} ? $param_href->{top_hits} : 10;
+    my $top_hits_tbl = 'top_hits' . "$param_href->{top_hits}";
+
+    # connect to database
+    my $ch = _get_ch($param_href);
+
+    # create top_hits table
+    my $create_top_hits_q = qq{
+    CREATE TABLE $top_hits_tbl (
+    ti UInt32,
+    species_name String,
+    gene_hits_per_species UInt64,
+    hits1 UInt32,
+    hits2 UInt32,
+    hits3 UInt32,
+    hits4 UInt32,
+    hits5 UInt32,
+    hits6 UInt32,
+    hits7 UInt32,
+    hits8 UInt32,
+    hits9 UInt32,
+    hits10 UInt32,
+    date Date  DEFAULT today() )
+    ENGINE=MergeTree (date, ti, 8192) };
+
+    _create_table_ch( { table_name => $top_hits_tbl, ch => $ch, query => $create_top_hits_q, %$param_href } );
+    $log->trace("Report: $create_top_hits_q");
+
+    # select all expanded tables in a support table
+    my $select_exp_q = qq{ SELECT report_exp_tbl FROM $param_href->{database}.support };
+    my $tbl_aref     = $ch->select($select_exp_q);
+    my @exp_tables   = map { $_->[0] } @{$tbl_aref};
+    print Dumper( \@exp_tables );
+
+    # select top 10 hits from table
+    foreach my $exp_tbl (@exp_tables) {
+        my $ins_hits_q = qq{
+        INSERT INTO $top_hits_tbl (ti, species_name, gene_hits_per_species, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10)
+        SELECT ti, species_name, gene_hits_per_species, hits1, hits2, hits3, hits4, hits5, hits6, hits7, hits8, hits9, hits10
+        FROM $param_href->{database}.$exp_tbl
+        WHERE ps = 1
+        ORDER BY gene_hits_per_species DESC
+        LIMIT $top_hits
+        };
+
+        $log->trace($ins_hits_q);
+        eval { $ch->do($ins_hits_q); };
+        $log->error("Error: inserting {$param_href->{database}.$top_hits_tbl} failed for $exp_tbl: $@") if $@;
+        $log->info("Action: {$param_href->{database}.$top_hits_tbl} inserted from $exp_tbl") unless $@;
+    }
+
+    return $top_hits_tbl;
+}
+
+
 1;
 __END__
 
@@ -3004,6 +3079,9 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     # restore all tables to a database
     FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8
     FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8 --drop_tbl
+
+    # find top hits N for all species in a database
+    FindOrigin.pm --mode=top_hits -d kam --top_hits=10
 
 
 
@@ -3147,6 +3225,13 @@ It can run in parallel if --max_processes specified.
 
 Restores a single table or all tables from a directory. It creates (optionally drops) a table and imports table contents. It uses pigz to decompress table contents.
 It can run in parallel if --max_processes specified.
+
+=item top_hits
+
+ # find top hits N for all species in a database
+ FindOrigin.pm --mode=top_hits -d kam --top_hits=10
+
+It finds top N species with most BLAST hits (proteins found) in prokaryotes.
 
 
 =back

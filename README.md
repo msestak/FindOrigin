@@ -48,6 +48,9 @@ FindOrigin - It's a modulino used to analyze BLAST output and database in ClickH
     FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8
     FindOrigin.pm --mode=restore_chdb --database=kam --in=/msestak/blastout/ --max_processes=8 --drop_tbl
 
+    # find top hits N for all species in a database
+    FindOrigin.pm --mode=top_hits -d kam --top_hits=10
+
 # DESCRIPTION
 
 FindOrigin is modulino used to analyze BLAST database (to get content in genomes and sequences) and BLAST output (to figure out where are hits coming from). It includes config, command-line and logging management.
@@ -185,6 +188,13 @@ FindOrigin is modulino used to analyze BLAST database (to get content in genomes
 
     Restores a single table or all tables from a directory. It creates (optionally drops) a table and imports table contents. It uses pigz to decompress table contents.
     It can run in parallel if --max\_processes specified.
+
+- top\_hits
+
+        # find top hits N for all species in a database
+        FindOrigin.pm --mode=top_hits -d kam --top_hits=10
+
+    It finds top N species with most BLAST hits (proteins found) in prokaryotes.
 
 # CONFIGURATION
 
