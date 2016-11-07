@@ -11,7 +11,6 @@ use Getopt::Long;
 use Pod::Usage;
 use Capture::Tiny qw/capture/;
 use Data::Dumper;
-use Data::Printer;
 #use Regexp::Debugger;
 use Log::Log4perl;
 use File::Find::Rule;
@@ -19,6 +18,7 @@ use Config::Std { def_sep => '=' };   #ClickHouse uses =
 use POSIX qw(mkfifo);
 use HTTP::Tiny;
 use ClickHouse;
+use HTTP::ClickHouse;
 use PerlIO::gzip;
 use File::Temp qw(tempfile);
 use DateTime::Tiny;

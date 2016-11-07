@@ -1,4 +1,4 @@
-requires 'perl', '5.008001';
+requires 'perl', '5.010001';
 requires 'strict';
 requires 'warnings';
 requires 'Exporter';
@@ -9,13 +9,16 @@ requires 'Getopt::Long';
 requires 'Pod::Usage';
 requires 'Capture::Tiny';
 requires 'Data::Dumper';
-requires 'Data::Printer';
-requires 'Regexp::Debugger';
 requires 'Log::Log4perl';
 requires 'File::Find::Rule';
 requires 'Config::Std';
+requires 'POSIX';
 requires 'HTTP::Tiny';
-requires 'ClickHouse';
+requires 'HTTP::ClickHouse';
+requires 'PerlIO::gzip';
+requires 'File::Temp';
+requires 'DateTime::Tiny';
+requires 'Parallel::ForkManager';
 
 on 'test' => sub {
     requires 'Test::More', '0.98';
