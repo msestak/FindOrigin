@@ -25,6 +25,7 @@ my @subs = qw(
   import_blastdb
   dump_chdb
   restore_chdb
+  top_hits
 );
 
 use_ok( $module, @subs);

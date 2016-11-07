@@ -17,7 +17,6 @@ use File::Find::Rule;
 use Config::Std { def_sep => '=' };   #ClickHouse uses =
 use POSIX qw(mkfifo);
 use HTTP::Tiny;
-use ClickHouse;
 use HTTP::ClickHouse;
 use PerlIO::gzip;
 use File::Temp qw(tempfile);
@@ -1216,13 +1215,13 @@ sub blastout_uniq_orig {
 	open (my $dbin_fh, ">", \$scalar) or $log->logdie("Error: can't open scalar variable for writing");
 
 	#retrieve entire table to modify it and return back
-	my $rows = $ch->select("SELECT ps, ti, species_name, gene_hits_per_species FROM $param_href->{database}.$report_gene_hits_per_species_tbl");
+	my $rows = $ch->selectall_array("SELECT ps, ti, species_name, gene_hits_per_species FROM $param_href->{database}.$report_gene_hits_per_species_tbl");
     foreach my $row (@$rows) {
 		my ($ps, $ti, $species_name, $gene_hits) = @$row;
 		print "TABLE$ps\t$ti\t$species_name\t{$gene_hits}\n";
 		
 		# get list of prot_ids associated with specific ti
-		my $prot_ids =  $ch->select("SELECT prot_id FROM $param_href->{database}.$blout_species_tbl WHERE ti = $ti");
+		my $prot_ids =  $ch->selectall_array("SELECT prot_id FROM $param_href->{database}.$blout_species_tbl WHERE ti = $ti");
 		my @genes;
 		foreach my $prot_id (@$prot_ids) {
 			push @genes, @$prot_id;
@@ -1367,7 +1366,7 @@ sub _blastout_uniq_start_chunked {
 
     # retrieve all prot_ids to iterate on them
     my $select_prot_id_aref
-      = $ch->select("SELECT DISTINCT prot_id FROM $param_href->{database}.$param_href->{blastout_tbl}");
+      = $ch->selectall_array("SELECT DISTINCT prot_id FROM $param_href->{database}.$param_href->{blastout_tbl}");
     my @prot_id = map { $_->[0] } @{$select_prot_id_aref};
     my $prot_id_cnt = @prot_id;
 
@@ -1643,7 +1642,7 @@ sub bl_uniq_expanded {
 
     # get phylostrata from REPORT_PER_PS table to iterate on phylostrata
     my $select_ps_q = qq{ SELECT DISTINCT ps FROM $param_href->{database}.$param_href->{report_ps_tbl} ORDER BY ps};
-    my $ps_aref     = $ch->select($select_ps_q);
+    my $ps_aref     = $ch->selectall_array($select_ps_q);
     my @ps          = map { $_->[0] } @{$ps_aref};
     $log->trace( 'Returned phylostrata: {', join( '}{', @ps ), '}' );
 
@@ -1657,7 +1656,7 @@ sub bl_uniq_expanded {
         WHERE ps = $ps
         ORDER BY gene_hits_per_species
         };
-        my $ti_genelist_aref = $ch->select($select_gene_list_from_report_q);
+        my $ti_genelist_aref = $ch->selectall_array($select_gene_list_from_report_q);
         my %ti_genelist_h = map { $_->[0], $_->[1] } @{$ti_genelist_aref};
 
         # get ti list sorted by gene_hits_per_species
@@ -1874,7 +1873,7 @@ sub bl_uniq_exp_iter {
 
     # get phylostrata from REPORT_PER_PS table to iterate on phylostrata
     my $select_ps_q = qq{ SELECT DISTINCT ps FROM $param_href->{database}.$param_href->{report_ps_tbl} ORDER BY ps};
-    my $ps_aref     = $ch->select($select_ps_q);
+    my $ps_aref     = $ch->selectall_array($select_ps_q);
     my @ps          = map { $_->[0] } @{$ps_aref};
     $log->trace( 'Returned phylostrata: {', join( '}{', @ps ), '}' );
 
@@ -1888,7 +1887,7 @@ sub bl_uniq_exp_iter {
         WHERE ps = $ps
         ORDER BY gene_hits_per_species
         };
-        my $ti_aref = $ch->select($select_ti_list_from_report_q);
+        my $ti_aref = $ch->selectall_array($select_ti_list_from_report_q);
         my @ti = map { $_->[0] } @{$ti_aref};
 
         # count prot_ids ans store into hash to be used later
@@ -1901,7 +1900,7 @@ sub bl_uniq_exp_iter {
             FROM $param_href->{database}.$param_href->{report_ps_tbl}
             WHERE ps = $ps AND ti = $ti
             };
-            my $genelist_aref = $ch->select($select_genelist_from_report_q);
+            my $genelist_aref = $ch->selectall_array($select_genelist_from_report_q);
             my @genelist_one  = @{ $genelist_aref->[0] };
             my @genelist_exp  = split ",", $genelist_one[0];
 
@@ -1923,7 +1922,7 @@ sub bl_uniq_exp_iter {
             FROM $param_href->{database}.$param_href->{report_ps_tbl}
             WHERE ps = $ps AND ti = $ti
             };
-            my $genelist_aref = $ch->select($select_genelist_from_report_q);
+            my $genelist_aref = $ch->selectall_array($select_genelist_from_report_q);
             my @genelist_one  = @{ $genelist_aref->[0] };
             my @genelist_exp  = split ",", $genelist_one[0];
 
@@ -2193,16 +2192,22 @@ sub _get_ch {
     my $host     = defined $param_href->{host}     ? $param_href->{host}     : 'localhost';
     my $database = defined $param_href->{database} ? $param_href->{database} : 'default';
     my $port     = defined $param_href->{port}     ? $param_href->{port}     : 8123;
+    my $nb_timeout = 25;    # optional, default value 25 second
+    my $keep_alive = 1;     # optional, default 1 (1 or 0)
+    my $debug      = 1;     # optional, default 0 (0 or 1)
 
-    my $ch = ClickHouse->new(
-        host     => $host,
-        port     => $port,
-        database => $database,
-        user     => $user,
-        password => $password,
+    my $ch = HTTP::ClickHouse->new(
+        host       => $host,
+        port       => $port,
+        database   => $database,
+        user       => $user,
+        password   => $password,
+        nb_timeout => $nb_timeout,
+        keep_alive => $keep_alive,
+        debug      => $debug,
     );
 
-	#print Dumper $ch;
+    #print Dumper $ch;
 
     return $ch;
 }
@@ -2315,7 +2320,7 @@ sub _get_row_cnt_ch {
     # check number of rows inserted
     my $query_cnt = qq{ SELECT count() FROM $param_href->{database}.$param_href->{table_name} };
     my $rows;
-    eval { $rows = $param_href->{ch}->select($query_cnt); };
+    eval { $rows = $param_href->{ch}->selectall_array($query_cnt); };
     my $row_cnt = $rows->[0][0];
     $log->error("Error: counting rows for {$param_href->{database}.$param_href->{table_name}} failed") if $@;
     $log->info("Report: table {$param_href->{database}.$param_href->{table_name}} contains $row_cnt rows") unless $@;
@@ -2394,7 +2399,7 @@ sub queue_and_run {
 
         # check if organism already exists (if yes skip)
         my $ch        = _get_ch($param_href);
-        my $organisms_aref_of_arefs = $ch->select("SELECT organism FROM $param_href->{database}.support ORDER BY organism");
+        my $organisms_aref_of_arefs = $ch->selectall_array("SELECT organism FROM $param_href->{database}.support ORDER BY organism");
         my @organisms = map { $_->[0] } @{$organisms_aref_of_arefs};
         my $org_in_db_print = sprintf( Data::Dumper->Dump( [ \@organisms ], [ qw(*organisms_in_database) ]) );
         $log->debug("$org_in_db_print");
@@ -2741,7 +2746,7 @@ sub _dump_entire_db {
 
     # select all tables in a database
     my $select_tbl_q = qq{ SELECT name FROM system.tables WHERE database = '$param_href->{database}' };
-    my $tbl_aref     = $ch->select($select_tbl_q);
+    my $tbl_aref     = $ch->selectall_array($select_tbl_q);
     my @tables       = map { $_->[0] } @{$tbl_aref};
 
     # dump them in parallel
@@ -3000,7 +3005,7 @@ sub top_hits {
 
     # select all expanded tables in a support table
     my $select_exp_q = qq{ SELECT report_exp_tbl FROM $param_href->{database}.support };
-    my $tbl_aref     = $ch->select($select_exp_q);
+my $tbl_aref     = $ch->selectall_array($select_exp_q);
     my @exp_tables   = map { $_->[0] } @{$tbl_aref};
     print Dumper( \@exp_tables );
 
