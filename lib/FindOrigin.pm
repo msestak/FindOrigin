@@ -1888,6 +1888,7 @@ sub bl_uniq_exp_iter {
         ORDER BY gene_hits_per_species
         };
         my $ti_aref = $ch->selectall_array($select_ti_list_from_report_q);
+		print Dumper($ti_aref);
         my @ti = map { $_->[0] } @{$ti_aref};
 
         # count prot_ids ans store into hash to be used later
@@ -1901,6 +1902,7 @@ sub bl_uniq_exp_iter {
             WHERE ps = $ps AND ti = $ti
             };
             my $genelist_aref = $ch->selectall_array($select_genelist_from_report_q);
+			print Dumper($genelist_aref);
             my @genelist_one  = @{ $genelist_aref->[0] };
             my @genelist_exp  = split ",", $genelist_one[0];
 
@@ -3126,9 +3128,6 @@ It drops and recreates table in a database where it will import it and runs sepa
 =item import_map
 
  # options from command line
- FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -ho localhost -po 8123 -v
-
- # options from config
  FindOrigin.pm --mode=import_map -d jura --map t/data/hs3.phmap_names -v
 
 Removes header from map file and writes columns (prot_id, phylostrata, ti, psname) to tmp file and imports that file into ClickHouse (needs ClickHouse connection parameters to connect to ClickHouse).
@@ -3137,9 +3136,6 @@ It can use PS, TI and PSNAME config sections.
 =item import_blastdb_stats
 
  # options from command line
- FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -ho localhost -po 8123 -v
-
- # options from config
  FindOrigin.pm --mode=import_blastdb_stats -d jura --stats=t/data/analyze_hs_9606_all_ff_for_db -v
 
 Imports analyze stats file created by AnalyzePhyloDb.
@@ -3150,9 +3146,6 @@ It can use PS and TI config sections.
 =item import_names
 
  # options from command line
- FindOrigin.pm --mode=import_names -d jura --names=t/data/names.dmp.fmt.new.gz -ho localhost -po 8123 -v
-
- # options from config
  FindOrigin.pm --mode=import_names -d jura --names=t/data/names.dmp.fmt.new.gz -v
 
 Imports names file (columns ti, species_name) into ClickHouse.
@@ -3160,10 +3153,7 @@ Imports names file (columns ti, species_name) into ClickHouse.
 =item blastout_uniq
 
  # options from command line
- FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
-
- # options from config
- FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_1mil -v
+ FindOrigin.pm --mode=blastout_uniq -d jura --blastout_tbl=hs_all_plus_21_12_2015 --stats_gen_tbl=analyze_hs_9606_all_ff_for_db_stats_genomes --map_tbl=hs3_map --names_tbl=names_dmp_fmt_new
 
 It creates a unique non-redundant blastout_uniq table with only relevant information (prot_id, ti) for stratification and other purposes. Other columns (score, pgi blast hit) could be added later too.
 From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl2 which holds summary of per phylostrata per species of BLAST output analysis (ps, ti, species_name, gene_hits_per_species, genelist).
@@ -3176,7 +3166,7 @@ From that blastout_uniq_tbl it creates report_gene_hit_per_species_tbl2 which ho
  # works iteratively, less memory, but slower
  FindOrigin.pm --mode=bl_uniq_exp_iter -d jura --report_ps_tbl=hs_1mil_report_per_species -v -v
 
-Update report_ps_tbl table with unique and intersect hits and gene lists.
+Create new table like report_ps_tbl table with unique and intersect hits and gene lists.
 
 =item exclude_ti_from_blastout
 
